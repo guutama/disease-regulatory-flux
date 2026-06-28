@@ -74,6 +74,30 @@ The genotype and eQTL files must identify variants the **same way**:
 
 ---
 
+## Running the pipeline
+
+Requires Nextflow ≥ 24.04.2 (and Java 11+).
+
+Provide a samplesheet CSV with a header and one row per tissue:
+
+```
+tissue,expression,genotype,eqtl
+AOR,/data/AOR.expr.tsv.gz,/data/AOR.geno.tsv.gz,/data/AOR.eqtl.tsv.gz
+LIV,/data/LIV.expr.tsv.gz,/data/LIV.geno.tsv.gz,/data/LIV.eqtl.tsv.gz
+```
+
+Then run:
+
+```
+nextflow run flux.nf --samplesheet samples.csv --outdir results
+```
+
+Outputs are written per tissue under `results/harmonised/`. The column names and field
+delimiter are set in `nextflow.config` (or overridden with `--<param>`), so a new dataset
+needs no code changes.
+
+---
+
 ## First step: harmonisation
 
 The first stage aligns the inputs so the rest of the pipeline can rely on them
