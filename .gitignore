@@ -1,0 +1,70 @@
+# ============================================================================
+# CONTROLLED-ACCESS DATA & DERIVED RESULTS — never commit (STARNET/PsychENCODE)
+# ============================================================================
+data/
+data_deid/
+resources/
+results/
+results_cv/
+results_findr_test/
+results_psychencode/
+results_psychencode_adj/
+results_psychencode_adj_lite/
+results_psychencode_adj_lite_pro/
+results_starnet_traingrn/
+rlibs_susie/
+
+# genomic data files anywhere
+*.vcf
+*.vcf.gz
+*.vcf.gz.tbi
+*.vcf.gz.csi
+*.bed
+*.bim
+*.fam
+*.bgen
+*.bcf
+*.gz
+*.tsv.gz
+*.csv.gz
+*.npz
+*.h5
+*.hdf5
+*.parquet
+*.pkl
+*.pickle
+*.RData
+*.rds
+*.feather
+
+# ============================================================================
+# Runtime / environments / logs / caches
+# ============================================================================
+work/
+.nextflow/
+.nextflow.log*
+.conda_envs/
+.conda_pkgs/
+julia_project/
+lib/
+logs/
+test/fixtures/
+*.log
+.claude/
+
+# python / misc
+*.pyc
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
