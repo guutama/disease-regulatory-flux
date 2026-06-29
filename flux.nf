@@ -10,6 +10,8 @@
  *                                 with BioFindr.
  *   Step 4  SELECT_CIS_FEATURES -- build each gene's cis-eQTL SNP set (the cis channel)
  *                                 per tissue.
+ *   Step 5  LD_PRUNE            -- LD-prune each gene's cis SNPs and emit a 0/1/2 hard-call
+ *                                 genotype matrix per tissue.
  *
  * Input: a samplesheet CSV (--samplesheet) with a header and one row per tissue:
  *
@@ -27,6 +29,7 @@ include { HARMONISE_INPUTS   } from './modules/local/harmonise_inputs.nf'
 include { SELECT_INSTRUMENTS } from './modules/local/select_instruments.nf'
 include { RECONSTRUCT_GRN    } from './modules/local/reconstruct_grn.nf'
 include { SELECT_CIS_FEATURES } from './modules/local/select_cis_features.nf'
+include { LD_PRUNE           } from './modules/local/ld_prune.nf'
 
 workflow {
     if( !params.samplesheet )
@@ -47,4 +50,10 @@ workflow {
 
     // cis channel: build each gene's cis-eQTL SNP set from the harmonised eQTL.
     SELECT_CIS_FEATURES(HARMONISE_INPUTS.out.aligned.map { t, x, g, e -> tuple(t, e) })
+
+    // LD-prune the cis SNP set, using the harmonised genotype and eQTL (joined by tissue).
+    ld_in = SELECT_CIS_FEATURES.out.cis_features
+        .join(HARMONISE_INPUTS.out.aligned)
+        .map { t, cis, x, g, e -> tuple(t, cis, g, e) }
+    LD_PRUNE(ld_in)
 }
