@@ -185,3 +185,23 @@ otherwise every association is trusted. Per tissue it writes:
 - `<tissue>.cis_features_qc.tsv` — pairs read, kept and dropped;
 
 under `results/cis_features/`.
+
+---
+
+## Fifth step: LD filtering
+
+The fifth stage thins each gene's cis-SNP set by linkage disequilibrium and emits a hard-call
+genotype matrix for the SNPs that survive (`bin/ld_prune.py`). Neighbouring SNPs are often
+strongly correlated, so the raw cis set is redundant. Per gene, the SNPs are ordered from the
+most to the least significant cis-eQTL and walked in turn: a SNP is kept unless its squared
+correlation (on the tissue's samples, using 0/1/2 hard calls) with an already-kept SNP
+exceeds `ld_r2_threshold` (default `0.7`, set in `nextflow.config`). Constant SNPs are
+dropped. Per tissue it writes:
+
+- `<tissue>.cis_snps_pruned.tsv.gz` — the kept cis SNPs per gene (`gene_id`, `variant_id`);
+- `<tissue>.genotype_012.tsv.gz` — a 0/1/2 hard-call matrix (`variant_id` + samples) for the
+  kept SNPs;
+- `<tissue>.ld_prune_summary.tsv` — per gene: cis SNPs in, kept and dropped;
+- `<tissue>.ld_prune_qc.tsv` — tissue-level totals;
+
+under `results/ld_pruned/`. This step uses NumPy.
