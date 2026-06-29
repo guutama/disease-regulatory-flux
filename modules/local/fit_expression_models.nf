@@ -4,10 +4,10 @@
  * For each gene, predicts its expression from its own cis SNPs (Step 5) and its upstream
  * regulators' cis SNPs (Step 6, the trans channel), using the harmonised expression (Step 1)
  * as the response and the 0/1/2 hard-call genotype (Step 5) as the predictors. The model is
- * fit in up to three configurations (cis_only, trans_only, cis_trans) and the best is kept;
- * a gene is predictable when its selected leave-one-out R^2 reaches the threshold. The
- * default method is the fast empirical-Bayes ridge; horseshoe (MCMC) is the alternative. See
- * bin/fit_expression_models.py for the contract.
+ * fit in up to three configurations (cis_only, trans_only, cis_trans), each by MCMC (NumPyro)
+ * and scored by PSIS leave-one-out (ArviZ); the best config by elpd is kept and a gene is
+ * predictable when its selected leave-one-out R^2 reaches the threshold. The prior is set by
+ * expr_model (bayes_ridge default, horseshoe or bslmm). See bin/fit_expression_models.py.
  *
  * Emits per tissue:
  *   <tissue>.expr_model_metrics.tsv.gz  per gene: per-config LOO-R^2, evidence, selected config
@@ -48,6 +48,7 @@ process FIT_EXPRESSION_MODELS {
         --max-trans       ${params.expr_max_trans} \\
         --mcmc-warmup     ${params.expr_mcmc_warmup} \\
         --mcmc-samples    ${params.expr_mcmc_samples} \\
+        --seed            ${params.expr_seed} \\
         --gene-col        '${params.gene_col}'
     """
 }
