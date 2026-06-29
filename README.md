@@ -223,3 +223,34 @@ features. A regulator reachable at more than one hop is reported at each. Per ti
 - `<tissue>.trans_features_qc.tsv` — tissue-level totals;
 
 under `results/trans_features/`.
+
+---
+
+## Seventh step: expression models
+
+The seventh stage fits a channel-aware Bayesian expression model for every gene
+(`bin/fit_expression_models.py`). Each gene's expression is predicted from two genetic
+channels --- its own cis SNPs (the cis channel) and its upstream regulators' cis SNPs (the
+trans channel) --- and the model is fit in up to three configurations: `cis_only`,
+`trans_only` and `cis_trans`. A gene with both channels is fit in all three; a gene with one
+channel is fit in that one. The configuration with the highest model evidence is selected,
+and the gene is **predictable** when the selected model's leave-one-out R² reaches the
+threshold (`0.01`).
+
+The method is set by `expr_model` in `nextflow.config`:
+
+- `bayes_ridge` (default) --- a fast empirical-Bayes ridge with a separate prior variance per
+  channel, an exact closed-form leave-one-out R² and a log-evidence for selection. No
+  sampling and no train/test split.
+- `horseshoe` --- a regularised-horseshoe model fit by MCMC (heavier; needs NumPyro).
+
+Per tissue it writes, under `results/expression_models/`:
+
+- `<tissue>.expr_model_metrics.tsv.gz` — per gene: per-config LOO-R², evidence and intercept,
+  the gene class, the selected config and whether the gene is predictable;
+- `<tissue>.expr_model_weights.tsv.gz` — posterior-mean raw-dosage weights (`gene_id`,
+  `method`, `config`, `channel`, `variant_id`, `weight`);
+- `<tissue>.expr_model_selected.tsv` — the predictable genes and their selected config;
+- `<tissue>.expr_model_stats.tsv` — tissue-level counts and mean LOO-R² per channel.
+
+This step uses NumPy (the default method); the `horseshoe` method additionally needs NumPyro.

@@ -35,3 +35,4 @@ installed once with `julia_project/install_biofindr.jl`. Julia 1.11.3 is require
 | 4. select cis features (`bin/select_cis_features.py`) | Python ≥ 3.9, standard library only |
 | 5. LD-prune (`bin/ld_prune.py`) | Python ≥ 3.9 + NumPy |
 | 6. trans features (`bin/trans_features.py`) | Python ≥ 3.9, standard library only |
+| 7. expression models (`bin/fit_expression_models.py`) | Python ≥ 3.9 + NumPy (`bayes_ridge`); NumPyro for `horseshoe` |
