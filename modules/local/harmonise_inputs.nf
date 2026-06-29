@@ -8,11 +8,12 @@
  * consistent order. See bin/harmonise_inputs.py for the contract and the variant-key rule
  * (rsID if present in both files, else chr:pos:ref:alt).
  *
- * Emits per tissue:
- *   <tissue>.expression.tsv.gz   all genes, shared samples
- *   <tissue>.genotype.tsv.gz     eQTL variants, shared samples
- *   <tissue>.eqtl.tsv.gz         cis pairs matched to genotype and expression
- *   <tissue>.harmonise_qc.tsv    kept/dropped counts for samples, genes and variants
+ * Emits per tissue (the "harmonised." infix keeps these distinct from the raw input files,
+ * which may share the plain <tissue>.expression/genotype/eqtl names):
+ *   <tissue>.harmonised.expression.tsv.gz   all genes, shared samples
+ *   <tissue>.harmonised.genotype.tsv.gz     eQTL variants, shared samples
+ *   <tissue>.harmonised.eqtl.tsv.gz         cis pairs matched to genotype and expression
+ *   <tissue>.harmonise_qc.tsv               kept/dropped counts for samples, genes and variants
  *
  * Required params (see nextflow.config): input_delimiter, gene_col, rsid_col, chrom_col,
  * pos_col, ref_col, alt_col, eqtl_beta_col, eqtl_se_col, eqtl_p_col.
@@ -29,10 +30,10 @@ process HARMONISE_INPUTS {
     tuple val(tissue), path(expression), path(genotype), path(eqtl)
 
     output:
-    tuple val(tissue), path("${tissue}.expression.tsv.gz"),
-                       path("${tissue}.genotype.tsv.gz"),
-                       path("${tissue}.eqtl.tsv.gz"),    emit: aligned
-    path  "${tissue}.harmonise_qc.tsv",                  emit: qc
+    tuple val(tissue), path("${tissue}.harmonised.expression.tsv.gz"),
+                       path("${tissue}.harmonised.genotype.tsv.gz"),
+                       path("${tissue}.harmonised.eqtl.tsv.gz"),    emit: aligned
+    path  "${tissue}.harmonise_qc.tsv",                             emit: qc
 
     script:
     """
@@ -40,9 +41,9 @@ process HARMONISE_INPUTS {
         --expression      ${expression} \\
         --genotype        ${genotype} \\
         --eqtl            ${eqtl} \\
-        --out-expression  ${tissue}.expression.tsv.gz \\
-        --out-genotype    ${tissue}.genotype.tsv.gz \\
-        --out-eqtl        ${tissue}.eqtl.tsv.gz \\
+        --out-expression  ${tissue}.harmonised.expression.tsv.gz \\
+        --out-genotype    ${tissue}.harmonised.genotype.tsv.gz \\
+        --out-eqtl        ${tissue}.harmonised.eqtl.tsv.gz \\
         --qc              ${tissue}.harmonise_qc.tsv \\
         --delimiter       '${params.input_delimiter}' \\
         --gene-col        '${params.gene_col}' \\
