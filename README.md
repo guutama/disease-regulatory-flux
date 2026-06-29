@@ -78,7 +78,9 @@ The genotype and eQTL files must identify variants the **same way**:
 
 Requires Nextflow ≥ 24.04.2 (and Java 11+).
 
-Provide a samplesheet CSV with a header and one row per tissue:
+You provide the pipeline with a **samplesheet**: a small CSV file you write yourself that
+lists, for each tissue, where its three input files are. The samplesheet has a header row
+with four fixed column names and then **one row per tissue**:
 
 ```
 tissue,expression,genotype,eqtl
@@ -86,10 +88,21 @@ AOR,/data/AOR.expr.tsv.gz,/data/AOR.geno.tsv.gz,/data/AOR.eqtl.tsv.gz
 LIV,/data/LIV.expr.tsv.gz,/data/LIV.geno.tsv.gz,/data/LIV.eqtl.tsv.gz
 ```
 
+| column | what to put in it |
+|--------|-------------------|
+| `tissue` | a short label for the tissue (your choice); used to name that tissue's outputs |
+| `expression` | path to the tissue's expression matrix (the file described above) |
+| `genotype` | path to the tissue's genotype dosage matrix |
+| `eqtl` | path to the tissue's cis-eQTL table |
+
+Add one row for every tissue you want to run. Paths may be absolute or relative to where
+you launch the pipeline. The input files themselves are the `.tsv[.gz]` tables described in
+*Inputs* above — the samplesheet only points to them.
+
 Then run:
 
 ```
-nextflow run flux.nf --samplesheet samples.csv --outdir results
+nextflow run flux.nf --samplesheet samplesheet.csv --outdir results
 ```
 
 Outputs are written per tissue under `results/harmonised/`. The column names and field

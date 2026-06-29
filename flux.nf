@@ -13,7 +13,7 @@
  * where the three paths are that tissue's reference files (see README).
  *
  * Run:
- *     nextflow run flux.nf --samplesheet samples.csv --outdir results_flux
+ *     nextflow run flux.nf --samplesheet samplesheet.csv --outdir results_flux
  */
 nextflow.enable.dsl = 2
 
