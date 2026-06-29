@@ -23,3 +23,4 @@ or in a container — is up to you.
 | step | requirements |
 |------|--------------|
 | 1. harmonise inputs (`bin/harmonise_inputs.py`) | Python ≥ 3.9, standard library only |
+| 2. select instruments (`bin/select_instruments.py`) | Python ≥ 3.9, standard library only |

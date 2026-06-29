@@ -125,3 +125,24 @@ The first stage aligns the inputs so the rest of the pipeline can rely on them
 
 It stops with a clear error if the files don't share samples, or if no eQTL pair survives
 the matching.
+
+---
+
+## Second step: instrument selection
+
+The second stage prepares the inputs for reconstructing the regulatory network
+(`bin/select_instruments.py`). A gene can regulate others only if it has a cis-eQTL, and
+the network reconstruction uses one genetic instrument per regulator — its **lead** cis-eQTL
+(the SNP with the smallest p-value; ties broken by the largest effect size, then the variant
+id). From the harmonised trio it writes three per-tissue files:
+
+- `<tissue>.dE.csv` — the **instrument list**: one row per regulator, as a `variant_id,gene_id`
+  pair;
+- `<tissue>.dG.csv` — the **genotype** of those instruments, samples in rows and one column
+  per instrument SNP;
+- `<tissue>.dX.csv` — the **expression** of all genes, samples in rows and one column per gene
+  (every gene is a candidate target);
+
+plus a QC report of how many samples, genes and instruments were selected. The expression
+and genotype files share one sample order, so they line up row by row. The files are written
+under `results/grn_inputs/`.
