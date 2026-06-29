@@ -12,6 +12,8 @@
  *                                 per tissue.
  *   Step 5  LD_PRUNE            -- LD-prune each gene's cis SNPs and emit a 0/1/2 hard-call
  *                                 genotype matrix per tissue.
+ *   Step 6  TRANS_FEATURES      -- collect each gene's upstream regulators' pruned cis SNPs
+ *                                 (the trans channel) by walking the network per tissue.
  *
  * Input: a samplesheet CSV (--samplesheet) with a header and one row per tissue:
  *
@@ -30,6 +32,7 @@ include { SELECT_INSTRUMENTS } from './modules/local/select_instruments.nf'
 include { RECONSTRUCT_GRN    } from './modules/local/reconstruct_grn.nf'
 include { SELECT_CIS_FEATURES } from './modules/local/select_cis_features.nf'
 include { LD_PRUNE           } from './modules/local/ld_prune.nf'
+include { TRANS_FEATURES     } from './modules/local/trans_features.nf'
 
 workflow {
     if( !params.samplesheet )
@@ -56,4 +59,10 @@ workflow {
         .join(HARMONISE_INPUTS.out.aligned)
         .map { t, cis, x, g, e -> tuple(t, cis, g, e) }
     LD_PRUNE(ld_in)
+
+    // trans channel: walk the GRN upward to collect each gene's ancestors' pruned cis SNPs.
+    tf_in = RECONSTRUCT_GRN.out.grn
+        .join(LD_PRUNE.out.pruned)
+        .map { t, edges, edges_all, cis_pruned, geno012 -> tuple(t, edges, cis_pruned) }
+    TRANS_FEATURES(tf_in)
 }
