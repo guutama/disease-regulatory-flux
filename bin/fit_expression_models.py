@@ -12,15 +12,17 @@ kept:
   cis_trans   both channels together.
 
 A gene with both channels is fit in all three; a gene with only one channel is fit in that
-one. The configuration with the highest model evidence is selected, and the gene counts as
-predictable when the selected model's leave-one-out R^2 reaches a threshold.
+one. Each configuration is fit by MCMC (NumPyro) and scored by PSIS leave-one-out
+cross-validation (ArviZ): the configuration with the highest expected log predictive density
+(elpd) is selected, and the gene counts as predictable when the selected model's leave-one-out
+R^2 reaches a threshold.
 
-Method (--method):
-  bayes_ridge  (default) channel-aware empirical-Bayes ridge: a separate Gaussian prior
-               variance per channel, fit by EM, with an exact closed-form leave-one-out R^2
-               and log-evidence. Fast --- no sampling and no train/test split.
-  horseshoe    a regularised-horseshoe model fit by MCMC (heavier; selected by ELPD). Set up
-               by --method horseshoe; requires NumPyro.
+Method (--method), a channel-aware prior over the coefficients:
+  bayes_ridge  (default) a Gaussian ridge with a separate scale per channel,
+               beta_j ~ Normal(0, tau_c);
+  horseshoe    a regularised horseshoe (a global-local shrinkage prior with a slab);
+  bslmm        a sparse-plus-polygenic prior (a spike-and-slab of large effects added to a
+               small polygenic background).
 
 Inputs (one tissue):
   --expression     harmonised gene-by-sample expression matrix (the response per gene);
@@ -29,16 +31,17 @@ Inputs (one tissue):
   --trans-features per-gene trans-feature SNPs (gene_id, hop, source_gene_id, variant_id).
 
 Output (in --outdir), for tissue <tissue>:
-  <tissue>.expr_model_metrics.tsv.gz  one row per gene: per-configuration LOO-R^2, evidence
-                                      and intercept, the gene class, the selected config and
+  <tissue>.expr_model_metrics.tsv.gz  one row per gene: per-configuration LOO-R^2 and elpd,
+                                      the gene class, the selected config, the selected
+                                      model's genetic standard deviation and intercept, and
                                       whether the gene is predictable;
   <tissue>.expr_model_weights.tsv.gz  long posterior-mean raw-dosage weights:
                                       gene_id, method, config, channel, variant_id, weight;
   <tissue>.expr_model_selected.tsv    the predictable genes and their selected config;
   <tissue>.expr_model_stats.tsv       tissue-level counts and mean LOO-R^2 per channel.
 
-Column names and the field delimiters are options, so a new dataset is supported by adjusting
-configuration rather than editing code.
+The MCMC and PSIS-LOO steps require NumPyro and ArviZ. Column names and the field delimiter
+are options, so a new dataset is supported by adjusting configuration rather than editing code.
 """
 from __future__ import annotations
 
@@ -52,7 +55,7 @@ from typing import TextIO
 import numpy as np
 
 PRED_THRESHOLD = 0.01
-LOG2PI = float(np.log(2.0 * np.pi))
+_MODEL_CACHE: dict = {}
 
 
 # ----------------------------------------------------------------------------- io helpers
@@ -131,52 +134,102 @@ def load_genotype(path: str, delim: str, variant_col: str, wanted: set[str]):
     return samples, geno
 
 
-# --------------------------------------------------------------- empirical-Bayes ridge fit
-def eb_ridge_loo(Xstd: np.ndarray, channel: np.ndarray, y: np.ndarray, em_iters: int = 15):
-    """Channel-aware empirical-Bayes ridge on standardised X and centred y.
+# --------------------------------------------------------------- channel-aware prior models
+def _build_models():
+    """Define the NumPyro prior models once (imported lazily so the module loads without
+    NumPyro). Each model places a channel-aware prior on the coefficients beta and a normal
+    likelihood y ~ Normal(X beta, sigma)."""
+    if _MODEL_CACHE:
+        return _MODEL_CACHE
+    import jax.numpy as jnp
+    import numpyro
+    import numpyro.distributions as dist
 
-    Each coefficient has a Gaussian prior with a per-channel precision (lambda_cis,
-    lambda_trans), fit by EM together with the noise variance. Returns the posterior-mean
-    coefficients (in standardised-X space), the exact leave-one-out R^2 (from the ridge
-    leverage), the in-sample R^2 and the log model evidence."""
-    n, p = Xstd.shape
-    Xty = Xstd.T @ y
-    XtX = Xstd.T @ Xstd
-    masks = (channel == 0, channel == 1)
-    lam = np.ones(2)
-    eye = np.eye(p)
-    for _ in range(em_iters):
-        Lam = lam[channel]
-        Ainv = np.linalg.inv(XtX + np.diag(Lam) + 1e-9 * eye)
-        beta = Ainv @ Xty
-        diag_invA = np.diag(Ainv)
-        gamma = np.clip(1.0 - Lam * diag_invA, 0.0, 1.0)
-        for c, mask in enumerate(masks):
-            if not mask.any():
-                continue
-            num = float(gamma[mask].sum())
-            den = float(np.sum(beta[mask] ** 2))
-            lam[c] = num / den if (den > 0 and num > 0) else max(lam[c], 1e-8)
+    def bayes_ridge(X, channel, n_ch, y=None):
+        n, p = X.shape
+        sigma = numpyro.sample("sigma", dist.HalfNormal(1.0))
+        tau = numpyro.sample("tau", dist.HalfCauchy(jnp.ones(n_ch)))     # per-channel ridge scale
+        z = numpyro.sample("z", dist.Normal(0., 1.).expand([p]).to_event(1))
+        beta = numpyro.deterministic("beta", z * tau[channel])
+        mu = numpyro.deterministic("mu", X @ beta)
+        numpyro.sample("y", dist.Normal(mu, sigma), obs=y)
 
-    Lam = lam[channel]
-    A = XtX + np.diag(Lam) + 1e-9 * eye
-    Ainv = np.linalg.inv(A)
-    beta = Ainv @ Xty
-    yhat = Xstd @ beta
-    h = np.einsum("ij,ij->i", Xstd @ Ainv, Xstd)        # leverage H_ii
-    denom = np.clip(1.0 - h, 1e-8, None)
-    sst = float(np.sum((y - y.mean()) ** 2))
-    loo_resid = (y - yhat) / denom
-    loo_r2 = float(1 - np.sum(loo_resid ** 2) / sst) if sst > 0 else float("nan")
-    in_r2 = float(1 - np.sum((y - yhat) ** 2) / sst) if sst > 0 else float("nan")
+    def reg_horseshoe(X, channel, n_ch, y=None, slab_scale=2.0, slab_df=4.0, tau0=0.1):
+        n, p = X.shape
+        sigma = numpyro.sample("sigma", dist.HalfNormal(1.0))
+        tau = numpyro.sample("tau", dist.HalfCauchy(tau0 * jnp.ones(n_ch)))
+        lam = numpyro.sample("lam", dist.HalfCauchy(jnp.ones(p)))
+        c2 = numpyro.sample("c2", dist.InverseGamma(slab_df / 2., (slab_df / 2.) * slab_scale ** 2))
+        z = numpyro.sample("z", dist.Normal(0., 1.).expand([p]).to_event(1))
+        tau_c = tau[channel]
+        lam_t = jnp.sqrt(c2 * lam ** 2 / (c2 + tau_c ** 2 * lam ** 2))
+        beta = numpyro.deterministic("beta", z * tau_c * lam_t)
+        mu = numpyro.deterministic("mu", X @ beta)
+        numpyro.sample("y", dist.Normal(mu, sigma), obs=y)
 
-    gamma_sum = float(np.sum(np.clip(1.0 - Lam * np.diag(Ainv), 0.0, 1.0)))
-    sigma2 = max(float(np.sum((y - yhat) ** 2)) / max(n - gamma_sum, 1.0), 1e-8)
-    sign, logdetA = np.linalg.slogdet(A)
-    logdetB = float(logdetA) - float(np.sum(np.log(Lam)))
-    yBy = float(y @ y) - float(Xty @ beta)
-    log_evidence = -0.5 * (n * LOG2PI + n * np.log(sigma2) + logdetB + yBy / sigma2)
-    return dict(beta_std=beta, loo_r2=loo_r2, in_r2=in_r2, log_evidence=log_evidence)
+    def spike_slab(beta_name, channel, n_ch, p, spike=0.05, a=1.0, b=9.0, scale0=1.0):
+        pi = numpyro.sample(f"pi_{beta_name}", dist.Beta(a * jnp.ones(n_ch), b * jnp.ones(n_ch)))
+        tau = numpyro.sample(f"tau_{beta_name}", dist.HalfCauchy(scale0 * jnp.ones(n_ch)))
+        slab = tau[channel]
+        scales = jnp.stack([spike * slab, slab], axis=-1)
+        probs = jnp.stack([1.0 - pi[channel], pi[channel]], axis=-1)
+        mix = dist.MixtureSameFamily(dist.Categorical(probs=probs),
+                                     dist.Normal(jnp.zeros((p, 2)), scales))
+        return numpyro.sample(beta_name, mix)
+
+    def bslmm(X, channel, n_ch, y=None):
+        n, p = X.shape
+        sigma = numpyro.sample("sigma", dist.HalfNormal(1.0))
+        tau_poly = numpyro.sample("tau_poly", dist.HalfCauchy(0.3 * jnp.ones(n_ch)))
+        zb = numpyro.sample("zb", dist.Normal(0., 1.).expand([p]).to_event(1))
+        poly = zb * tau_poly[channel]
+        sparse = spike_slab("sparse", channel, n_ch, p)
+        beta = numpyro.deterministic("beta", poly + sparse)
+        mu = numpyro.deterministic("mu", X @ beta)
+        numpyro.sample("y", dist.Normal(mu, sigma), obs=y)
+
+    numpyro.set_host_device_count(2)
+    _MODEL_CACHE.update(bayes_ridge=bayes_ridge, horseshoe=reg_horseshoe, bslmm=bslmm)
+    return _MODEL_CACHE
+
+
+def fit(method: str, Xstd: np.ndarray, channel: np.ndarray, n_ch: int, yc: np.ndarray,
+        *, seed: int, warmup: int, samples: int):
+    """Fit one configuration by MCMC and score it by PSIS leave-one-out cross-validation.
+
+    Returns the posterior-mean coefficients (standardised-X space), the LOO-R^2 (from the
+    PSIS-weighted leave-one-out predictions), the in-sample R^2, the elpd and its Pareto-k
+    diagnostic. Mirrors the reference fit so a run reproduces the trained models."""
+    import jax
+    import jax.numpy as jnp
+    from numpyro.infer import MCMC, NUTS, log_likelihood
+    import arviz as az
+
+    model_fn = _build_models()[method]
+    Xj, yj = jnp.asarray(Xstd), jnp.asarray(yc)
+    ch = jnp.asarray(channel)
+    mcmc = MCMC(NUTS(model_fn), num_warmup=warmup, num_samples=samples,
+                num_chains=2, progress_bar=False)
+    mcmc.run(jax.random.PRNGKey(seed), Xj, ch, n_ch, y=yj)
+    post = mcmc.get_samples()
+    mu = np.asarray(post["mu"])
+    beta_std = np.asarray(post["beta"]).mean(0)
+    ll = np.asarray(log_likelihood(model_fn, post, Xj, ch, n_ch, y=yj)["y"])
+    s = mu.shape[0]
+    idata = az.from_dict(posterior={"sigma": np.asarray(post["sigma"])[None]},
+                         log_likelihood={"y": ll[None]}, observed_data={"y": np.asarray(yc)})
+    loo = az.loo(idata, pointwise=True)
+    elpd, khat = float(loo.elpd_loo), float(np.max(loo.pareto_k))
+    reff = float(az.ess(idata, var_names=["sigma"], method="mean")["sigma"].values) / s
+    reff = min(max(reff, 1e-3), 1.0)
+    logw, _ = az.psislw(-ll.T, reff=reff)
+    w = np.exp(np.asarray(logw))
+    yhat_loo = np.einsum("ns,sn->n", w, mu)
+    sst = float(np.sum((yc - yc.mean()) ** 2))
+    loo_r2 = float(1 - np.sum((yc - yhat_loo) ** 2) / sst) if sst > 0 else float("nan")
+    in_r2 = float(1 - np.sum((yc - mu.mean(0)) ** 2) / sst) if sst > 0 else float("nan")
+    return dict(beta_std=beta_std, loo_r2=loo_r2, in_r2=in_r2, elpd=elpd,
+                p_loo=float(loo.p_loo), khat=khat)
 
 
 def standardise(cols: list[np.ndarray]):
@@ -198,68 +251,6 @@ def topk_by_corr(cols: list[np.ndarray], y: np.ndarray, k: int) -> list[int]:
     return sorted(range(M.shape[1]), key=lambda j: -r[j])[:k]
 
 
-# --------------------------------------------------------------- regularised horseshoe fit
-def fit_horseshoe(Xstd: np.ndarray, channel: np.ndarray, y: np.ndarray,
-                  *, warmup: int, samples: int, seed: int,
-                  slab_scale: float = 2.0, slab_df: float = 4.0, tau0: float = 0.1):
-    """Channel-aware regularised-horseshoe model fit by MCMC (NumPyro).
-
-    Each coefficient has a horseshoe prior with a per-channel global scale; the slab
-    regularises the largest coefficients (Piironen & Vehtari 2017). Returns the posterior-mean
-    coefficients (standardised-X space), the in-sample R^2, an approximate leave-one-out R^2
-    (truncated importance sampling over the posterior draws) and a WAIC elpd used to select
-    among configurations (the role the ridge log-evidence plays for bayes_ridge)."""
-    import jax
-    import jax.numpy as jnp
-    import numpyro
-    import numpyro.distributions as dist
-    from numpyro.infer import MCMC, NUTS
-
-    n, p = Xstd.shape
-    n_ch = int(channel.max()) + 1
-
-    def model(X, ch, obs=None):
-        sigma = numpyro.sample("sigma", dist.HalfNormal(1.0))
-        tau = numpyro.sample("tau", dist.HalfCauchy(tau0 * jnp.ones(n_ch)))
-        lam = numpyro.sample("lam", dist.HalfCauchy(jnp.ones(p)))
-        c2 = numpyro.sample("c2", dist.InverseGamma(slab_df / 2., (slab_df / 2.) * slab_scale ** 2))
-        z = numpyro.sample("z", dist.Normal(0., 1.).expand([p]).to_event(1))
-        tau_c = tau[ch]
-        lam_t = jnp.sqrt(c2 * lam ** 2 / (c2 + tau_c ** 2 * lam ** 2))
-        beta = numpyro.deterministic("beta", z * tau_c * lam_t)
-        numpyro.sample("obs", dist.Normal(X @ beta, sigma), obs=obs)
-
-    numpyro.set_host_device_count(1)
-    mcmc = MCMC(NUTS(model), num_warmup=warmup, num_samples=samples,
-                num_chains=1, progress_bar=False)
-    mcmc.run(jax.random.PRNGKey(seed), jnp.asarray(Xstd), jnp.asarray(channel),
-             obs=jnp.asarray(y))
-    post = mcmc.get_samples()
-    beta_s = np.asarray(post["beta"])            # (S, p)
-    sigma_s = np.asarray(post["sigma"])          # (S,)
-    beta_mean = beta_s.mean(0)
-    mu_s = beta_s @ Xstd.T                        # (S, n) predicted means per draw
-    yhat = Xstd @ beta_mean
-    sst = float(np.sum((y - y.mean()) ** 2))
-    in_r2 = float(1 - np.sum((y - yhat) ** 2) / sst) if sst > 0 else float("nan")
-
-    # pointwise log-likelihood L (S, n); WAIC elpd for model selection
-    resid = y[None, :] - mu_s
-    L = -0.5 * (LOG2PI + 2 * np.log(sigma_s)[:, None] + (resid ** 2) / (sigma_s ** 2)[:, None])
-    s = L.shape[0]
-    lppd = np.log(np.mean(np.exp(L - L.max(0)), axis=0)) + L.max(0)
-    elpd_waic = float(np.sum(lppd - np.var(L, axis=0)))
-
-    # leave-one-out predictive mean by truncated importance sampling (weights ~ 1/likelihood)
-    logr = -L
-    logr -= logr.max(0)
-    r = np.exp(logr)
-    w = np.minimum(r, r.mean(0) * np.sqrt(s))
-    yhat_loo = (w * mu_s).sum(0) / np.clip(w.sum(0), 1e-12, None)
-    loo_r2 = float(1 - np.sum((y - yhat_loo) ** 2) / sst) if sst > 0 else float("nan")
-    return dict(beta_std=beta_mean, loo_r2=loo_r2, in_r2=in_r2, log_evidence=elpd_waic)
-
-
 # ----------------------------------------------------------------------------------- main
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__,
@@ -270,21 +261,17 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--trans-features", required=True, help="input: per-gene trans-feature SNPs")
     p.add_argument("--tissue", required=True, help="tissue label, used to name the outputs")
     p.add_argument("--outdir", required=True, help="output directory")
-    p.add_argument("--method", choices=["bayes_ridge", "horseshoe"], default="bayes_ridge",
-                   help="expression model (default: bayes_ridge)")
+    p.add_argument("--method", choices=["bayes_ridge", "horseshoe", "bslmm"],
+                   default="bayes_ridge", help="channel-aware prior (default: bayes_ridge)")
     p.add_argument("--min-cis", type=int, default=1,
                    help="minimum cis SNPs for a gene to get a cis channel (default: 1)")
     p.add_argument("--max-trans", type=int, default=200,
                    help="cap on trans features per gene, kept by correlation (default: 200)")
     p.add_argument("--pred-threshold", type=float, default=PRED_THRESHOLD,
                    help="selected LOO-R^2 at/above which a gene is predictable (default: 0.01)")
-    p.add_argument("--mcmc-warmup", type=int, default=500,
-                   help="horseshoe: MCMC warm-up iterations (default: 500)")
-    p.add_argument("--mcmc-samples", type=int, default=500,
-                   help="horseshoe: MCMC sampling iterations (default: 500)")
-    p.add_argument("--mcmc-seed", type=int, default=0,
-                   help="horseshoe: MCMC random seed (default: 0)")
-    # format options
+    p.add_argument("--mcmc-warmup", type=int, default=400, help="MCMC warm-up iterations")
+    p.add_argument("--mcmc-samples", type=int, default=400, help="MCMC sampling iterations")
+    p.add_argument("--seed", type=int, default=1, help="MCMC random seed")
     p.add_argument("--delimiter", default="\t", help="delimiter of the tab inputs (default: tab)")
     p.add_argument("--gene-col", default="gene_id", help="gene-id column (default: gene_id)")
     p.add_argument("--variant-col", default="variant_id",
@@ -336,29 +323,32 @@ def main(argv=None) -> None:
 
     wf = _open(weights_path, "wt")
     wf.write("gene_id\tmethod\tconfig\tchannel\tvariant_id\tweight\n")
+    seed = args.seed
     metrics: list[dict] = []
 
     def fit_config(gene: str, config: str, variants: list[str], channels: list[str],
-                   yc: np.ndarray, ymu: float):
+                   yc: np.ndarray, ymu: float, n_ch: int):
+        nonlocal seed
         cols = [geno[v][g_idx] for v in variants]
         Xstd, mu, sd, keep = standardise(cols)
         if Xstd.shape[1] == 0:
             return None
         kept = [i for i, k in enumerate(keep) if k]
-        ch = np.array([0 if channels[i] == "cis" else 1 for i in kept])
-        if args.method == "horseshoe":
-            r = fit_horseshoe(Xstd, ch, yc, warmup=args.mcmc_warmup,
-                              samples=args.mcmc_samples, seed=args.mcmc_seed)
-        else:
-            r = eb_ridge_loo(Xstd, ch, yc)
+        # cis -> channel 0; trans -> channel n_ch-1 (so a single-channel config uses channel 0)
+        ch = np.array([0 if channels[i] == "cis" else n_ch - 1 for i in kept])
+        seed += 1
+        r = fit(args.method, Xstd, ch, n_ch, yc, seed=seed,
+                warmup=args.mcmc_warmup, samples=args.mcmc_samples)
         w_raw = r["beta_std"] / sd
         b0 = ymu - float(np.sum(w_raw * mu))
+        Xraw = np.column_stack(cols).astype(np.float64)[:, keep]
+        sigma_g = float(np.std(Xraw @ w_raw))
         for i, w in zip(kept, w_raw):
             wf.write(f"{gene}\t{args.method}\t{config}\t{channels[i]}\t{variants[i]}\t{w}\n")
         n_cis = sum(1 for i in kept if channels[i] == "cis")
         return dict(gene_id=gene, config=config, n_cis=n_cis, n_trans=len(kept) - n_cis,
-                    loo_r2=r["loo_r2"], in_r2=r["in_r2"], log_evidence=r["log_evidence"],
-                    intercept=b0)
+                    loo_r2=r["loo_r2"], in_r2=r["in_r2"], elpd=r["elpd"], p_loo=r["p_loo"],
+                    khat=r["khat"], sigma_g=sigma_g, intercept=b0)
 
     for gene in genes:
         if gene not in expr:
@@ -375,20 +365,20 @@ def main(argv=None) -> None:
         has_cis = len(cis_v) >= args.min_cis
 
         if has_cis:
-            m = fit_config(gene, "cis_only", cis_v, ["cis"] * len(cis_v), yc, ymu)
+            m = fit_config(gene, "cis_only", cis_v, ["cis"] * len(cis_v), yc, ymu, 1)
             if m:
                 metrics.append(m)
             if trans_v:
-                m = fit_config(gene, "trans_only", trans_v, ["trans"] * len(trans_v), yc, ymu)
+                m = fit_config(gene, "trans_only", trans_v, ["trans"] * len(trans_v), yc, ymu, 1)
                 if m:
                     metrics.append(m)
                 allv = cis_v + trans_v
                 ch = ["cis"] * len(cis_v) + ["trans"] * len(trans_v)
-                m = fit_config(gene, "cis_trans", allv, ch, yc, ymu)
+                m = fit_config(gene, "cis_trans", allv, ch, yc, ymu, 2)
                 if m:
                     metrics.append(m)
         elif trans_v:
-            m = fit_config(gene, "trans_only", trans_v, ["trans"] * len(trans_v), yc, ymu)
+            m = fit_config(gene, "trans_only", trans_v, ["trans"] * len(trans_v), yc, ymu, 1)
             if m:
                 metrics.append(m)
     wf.close()
@@ -397,7 +387,7 @@ def main(argv=None) -> None:
 
 
 def write_outputs(metrics: list[dict], args, metrics_path: str, selected_path: str):
-    """Pivot the per-gene-config rows to one row per gene, select the best config by evidence,
+    """Pivot the per-gene-config rows to one row per gene, select the best config by elpd,
     flag predictable genes, and write the metrics, selected and stats files."""
     by_gene: dict[str, dict[str, dict]] = defaultdict(dict)
     for m in metrics:
@@ -406,8 +396,9 @@ def write_outputs(metrics: list[dict], args, metrics_path: str, selected_path: s
 
     metric_cols = (["gene_id", "gene_class", "n_cis", "n_trans"]
                    + [f"loo_r2_{c}" for c in short.values()]
-                   + [f"logE_{c}" for c in short.values()]
-                   + ["best_config", "best_loo_r2", "predictable"])
+                   + [f"elpd_{c}" for c in short.values()]
+                   + ["best_config", "best_loo_r2", "best_elpd", "best_sigma_g",
+                      "best_intercept", "predictable"])
     rows = []
     for gene in sorted(by_gene):
         cfgs = by_gene[gene]
@@ -417,10 +408,13 @@ def write_outputs(metrics: list[dict], args, metrics_path: str, selected_path: s
                "n_cis": n_cis, "n_trans": n_trans}
         for cfg, s in short.items():
             row[f"loo_r2_{s}"] = cfgs[cfg]["loo_r2"] if cfg in cfgs else ""
-            row[f"logE_{s}"] = cfgs[cfg]["log_evidence"] if cfg in cfgs else ""
-        best = max(cfgs.values(), key=lambda m: m["log_evidence"])
+            row[f"elpd_{s}"] = cfgs[cfg]["elpd"] if cfg in cfgs else ""
+        best = max(cfgs.values(), key=lambda m: m["elpd"])
         row["best_config"] = best["config"]
         row["best_loo_r2"] = best["loo_r2"]
+        row["best_elpd"] = best["elpd"]
+        row["best_sigma_g"] = best["sigma_g"]
+        row["best_intercept"] = best["intercept"]
         row["predictable"] = best["loo_r2"] >= args.pred_threshold
         rows.append(row)
 
@@ -430,11 +424,13 @@ def write_outputs(metrics: list[dict], args, metrics_path: str, selected_path: s
             fh.write("\t".join(str(row[c]) for c in metric_cols) + "\n")
 
     with _open(selected_path, "wt") as fh:
-        fh.write("gene_id\tgene_class\tbest_config\tbest_loo_r2\tn_cis\tn_trans\n")
+        fh.write("gene_id\tgene_class\tbest_config\tbest_loo_r2\tbest_sigma_g\t"
+                 "best_intercept\tn_cis\tn_trans\n")
         for row in rows:
             if row["predictable"]:
                 fh.write(f"{row['gene_id']}\t{row['gene_class']}\t{row['best_config']}\t"
-                         f"{row['best_loo_r2']}\t{row['n_cis']}\t{row['n_trans']}\n")
+                         f"{row['best_loo_r2']}\t{row['best_sigma_g']}\t{row['best_intercept']}\t"
+                         f"{row['n_cis']}\t{row['n_trans']}\n")
 
     write_stats(rows, args)
 
