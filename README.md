@@ -146,3 +146,25 @@ id). From the harmonised trio it writes three per-tissue files:
 plus a QC report of how many samples, genes and instruments were selected. The expression
 and genotype files share one sample order, so they line up row by row. The files are written
 under `results/grn_inputs/`.
+
+---
+
+## Third step: GRN reconstruction
+
+The third stage reconstructs each tissue's gene regulatory network from the `dX`/`dG`/`dE`
+inputs using [BioFindr](https://github.com/tmichoel/BioFindr) (`bin/reconstruct_grn.jl`). It
+runs the canonical three-function pipeline---`findr` (pairwise causal posteriors, each edge
+oriented by the regulator's instrument), `globalfdr!` (keep edges at the chosen
+false-discovery rate) and `dagfindr!` (greedy cycle removal)---to produce a directed acyclic
+network in which every gene is a candidate target and every edge starts from an
+instrument-anchored regulator. Per tissue it writes:
+
+- `<tissue>.grn_edges.csv` — the network edges (`Source`, `Target`, edge probability and
+  q-value);
+- `<tissue>.grn_edges_all.csv.gz` — every inferred edge with its q-value, before the FDR cut,
+  so a network at a different FDR can be derived without recomputing the posteriors;
+- `<tissue>.grn_qc.tsv` — node, edge, regulator, target and degree counts;
+
+under `results/grn/`. This step uses Julia and BioFindr (pinned in `julia_project/`); the
+test combination, FDR and mixture-fit method are set by `grn_combination`, `grn_fdr` and
+`grn_findr_method` in `nextflow.config`.
