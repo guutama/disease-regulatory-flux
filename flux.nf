@@ -3,7 +3,9 @@
  * Disease-regulatory flux map -- pipeline entrypoint.
  *
  * Stages:
- *   Step 1  HARMONISE_INPUTS  -- align expression, genotype and eQTL per tissue.
+ *   Step 1  HARMONISE_INPUTS    -- align expression, genotype and eQTL per tissue.
+ *   Step 2  SELECT_INSTRUMENTS  -- pick each regulator's lead cis-eQTL and build the
+ *                                 GRN reconstruction inputs (dX, dG, dE) per tissue.
  *
  * Input: a samplesheet CSV (--samplesheet) with a header and one row per tissue:
  *
@@ -17,7 +19,8 @@
  */
 nextflow.enable.dsl = 2
 
-include { HARMONISE_INPUTS } from './modules/local/harmonise_inputs.nf'
+include { HARMONISE_INPUTS   } from './modules/local/harmonise_inputs.nf'
+include { SELECT_INSTRUMENTS } from './modules/local/select_instruments.nf'
 
 workflow {
     if( !params.samplesheet )
@@ -33,4 +36,5 @@ workflow {
             file(row.eqtl,       checkIfExists: true)) }
 
     HARMONISE_INPUTS(inputs)
+    SELECT_INSTRUMENTS(HARMONISE_INPUTS.out.aligned)
 }
