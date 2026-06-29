@@ -14,6 +14,8 @@
  *                                 genotype matrix per tissue.
  *   Step 6  TRANS_FEATURES      -- collect each gene's upstream regulators' pruned cis SNPs
  *                                 (the trans channel) by walking the network per tissue.
+ *   Step 7  FIT_EXPRESSION_MODELS -- fit channel-aware Bayesian expression models (cis /
+ *                                 trans / cis+trans) per gene, per tissue.
  *
  * Input: a samplesheet CSV (--samplesheet) with a header and one row per tissue:
  *
@@ -33,6 +35,7 @@ include { RECONSTRUCT_GRN    } from './modules/local/reconstruct_grn.nf'
 include { SELECT_CIS_FEATURES } from './modules/local/select_cis_features.nf'
 include { LD_PRUNE           } from './modules/local/ld_prune.nf'
 include { TRANS_FEATURES     } from './modules/local/trans_features.nf'
+include { FIT_EXPRESSION_MODELS } from './modules/local/fit_expression_models.nf'
 
 workflow {
     if( !params.samplesheet )
@@ -65,4 +68,11 @@ workflow {
         .join(LD_PRUNE.out.pruned)
         .map { t, edges, edges_all, cis_pruned, geno012 -> tuple(t, edges, cis_pruned) }
     TRANS_FEATURES(tf_in)
+
+    // expression models: predict each gene from its cis SNPs and its regulators' cis SNPs.
+    fit_in = HARMONISE_INPUTS.out.aligned.map { t, x, g, e -> tuple(t, x) }
+        .join(LD_PRUNE.out.pruned)                       // t, expr, cis_pruned, geno012
+        .join(TRANS_FEATURES.out.trans_features)         // t, expr, cis_pruned, geno012, trans
+        .map { t, expr, cis_pruned, geno012, trans -> tuple(t, expr, geno012, cis_pruned, trans) }
+    FIT_EXPRESSION_MODELS(fit_in)
 }
