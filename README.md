@@ -168,3 +168,20 @@ instrument-anchored regulator. Per tissue it writes:
 under `results/grn/`. This step uses Julia and BioFindr (pinned in `julia_project/`); the
 test combination, FDR and mixture-fit method are set by `grn_combination`, `grn_fdr` and
 `grn_findr_method` in `nextflow.config`.
+
+---
+
+## Fourth step: cis-eQTL feature selection
+
+The fourth stage builds each gene's **cis channel** --- the set of cis-eQTL SNPs used to
+predict its expression (`bin/select_cis_features.py`). The harmonised eQTL table is already
+cis (the eQTL analysis windowed it), so this step does not re-window: it collects, per gene,
+the variants associated with it and drops duplicate pairs. If `cis_max_pvalue` is set in
+`nextflow.config` and the table has a p-value column, weaker associations are dropped;
+otherwise every association is trusted. Per tissue it writes:
+
+- `<tissue>.cis_features.tsv.gz` — the per-gene cis-SNP set (`gene_id`, `variant_id`);
+- `<tissue>.cis_features_summary.tsv` — per gene: number of cis SNPs;
+- `<tissue>.cis_features_qc.tsv` — pairs read, kept and dropped;
+
+under `results/cis_features/`.

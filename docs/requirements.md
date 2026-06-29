@@ -31,3 +31,4 @@ installed once with `julia_project/install_biofindr.jl`. Julia 1.11.3 is require
 | 1. harmonise inputs (`bin/harmonise_inputs.py`) | Python ≥ 3.9, standard library only |
 | 2. select instruments (`bin/select_instruments.py`) | Python ≥ 3.9, standard library only |
 | 3. reconstruct GRN (`bin/reconstruct_grn.jl`) | Julia 1.11.3 + BioFindr (pinned in `julia_project/`) |
+| 4. select cis features (`bin/select_cis_features.py`) | Python ≥ 3.9, standard library only |
