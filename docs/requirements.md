@@ -34,3 +34,4 @@ installed once with `julia_project/install_biofindr.jl`. Julia 1.11.3 is require
 | 3. reconstruct GRN (`bin/reconstruct_grn.jl`) | Julia 1.11.3 + BioFindr (pinned in `julia_project/`) |
 | 4. select cis features (`bin/select_cis_features.py`) | Python ≥ 3.9, standard library only |
 | 5. LD-prune (`bin/ld_prune.py`) | Python ≥ 3.9 + NumPy |
+| 6. trans features (`bin/trans_features.py`) | Python ≥ 3.9, standard library only |

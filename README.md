@@ -205,3 +205,21 @@ dropped. Per tissue it writes:
 - `<tissue>.ld_prune_qc.tsv` — tissue-level totals;
 
 under `results/ld_pruned/`. This step uses NumPy.
+
+---
+
+## Sixth step: trans-feature construction
+
+The sixth stage builds each gene's **trans channel** --- the genetics of its upstream
+regulators (`bin/trans_features.py`). Starting from each gene it walks the reconstructed
+network backwards: to the gene's direct regulators (hop 1), their regulators (hop 2), and so
+on up to `trans_max_hop` hops (default `2`, set in `nextflow.config`). For every regulator
+reached it collects that regulator's LD-pruned cis SNPs; those SNPs are the gene's trans
+features. A regulator reachable at more than one hop is reported at each. Per tissue it writes:
+
+- `<tissue>.trans_features.tsv.gz` — one row per (gene, hop, regulator, variant):
+  `gene_id`, `hop`, `source_gene_id`, `variant_id`;
+- `<tissue>.trans_features_summary.tsv` — per gene: number of regulators and unique trans SNPs;
+- `<tissue>.trans_features_qc.tsv` — tissue-level totals;
+
+under `results/trans_features/`.
