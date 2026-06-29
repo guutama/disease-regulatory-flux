@@ -8,6 +8,8 @@
  *                                 GRN reconstruction inputs (dX, dG, dE) per tissue.
  *   Step 3  RECONSTRUCT_GRN     -- infer the directed gene regulatory network per tissue
  *                                 with BioFindr.
+ *   Step 4  SELECT_CIS_FEATURES -- build each gene's cis-eQTL SNP set (the cis channel)
+ *                                 per tissue.
  *
  * Input: a samplesheet CSV (--samplesheet) with a header and one row per tissue:
  *
@@ -24,6 +26,7 @@ nextflow.enable.dsl = 2
 include { HARMONISE_INPUTS   } from './modules/local/harmonise_inputs.nf'
 include { SELECT_INSTRUMENTS } from './modules/local/select_instruments.nf'
 include { RECONSTRUCT_GRN    } from './modules/local/reconstruct_grn.nf'
+include { SELECT_CIS_FEATURES } from './modules/local/select_cis_features.nf'
 
 workflow {
     if( !params.samplesheet )
@@ -41,4 +44,7 @@ workflow {
     HARMONISE_INPUTS(inputs)
     SELECT_INSTRUMENTS(HARMONISE_INPUTS.out.aligned)
     RECONSTRUCT_GRN(SELECT_INSTRUMENTS.out.grn_inputs)
+
+    // cis channel: build each gene's cis-eQTL SNP set from the harmonised eQTL.
+    SELECT_CIS_FEATURES(HARMONISE_INPUTS.out.aligned.map { t, x, g, e -> tuple(t, e) })
 }
