@@ -1,6 +1,6 @@
 """Unit tests for bin/harmonise_inputs.py (Step 1: input harmonisation).
 
-Simulated trio is generated in tmp_path — no data files are committed. We test:
+A simulated trio is generated in tmp_path. We test:
   * the variant-key resolution rule (prefer rsID, else chr:pos:ref:alt, else error),
   * the three-way intersection (samples / genes / variants),
   * that a gene losing all its instruments is dropped,
