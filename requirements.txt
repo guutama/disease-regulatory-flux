@@ -1,0 +1,3 @@
+# Python dependencies for the pipeline scripts. Most steps use only the standard
+# library; the LD-filtering step (bin/ld_prune.py) needs NumPy.
+numpy>=1.21
