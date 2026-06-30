@@ -32,14 +32,14 @@ S = [f"S{i}" for i in range(1, 11)]                       # 10 samples
 
 # rs1 == rs2 (perfect LD); rs3 independent of rs1; rs4 constant; rs5 fractional dosages;
 # rs6 == rs7 (perfect LD).
-GENO = [["variant_id"] + S,
-        ["rs1", 0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
-        ["rs2", 0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
-        ["rs3", 0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
-        ["rs4", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        ["rs5", 0.4, 1.6, 2.0, 0.0, 1.0, 0.6, 1.4, 0.9, 0.1, 1.9],
-        ["rs6", 2, 2, 2, 1, 1, 1, 0, 0, 0, 2],
-        ["rs7", 2, 2, 2, 1, 1, 1, 0, 0, 0, 2]]
+GENO = [["variant_id", "chromosome", "position", "ref", "alt"] + S,
+        ["rs1", "1", "101", "A", "G", 0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+        ["rs2", "1", "102", "C", "T", 0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+        ["rs3", "1", "103", "G", "A", 0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+        ["rs4", "1", "104", "T", "C", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ["rs5", "2", "201", "A", "C", 0.4, 1.6, 2.0, 0.0, 1.0, 0.6, 1.4, 0.9, 0.1, 1.9],
+        ["rs6", "2", "202", "G", "T", 2, 2, 2, 1, 1, 1, 0, 0, 0, 2],
+        ["rs7", "2", "203", "C", "A", 2, 2, 2, 1, 1, 1, 0, 0, 0, 2]]
 
 CIS = [["gene_id", "variant_id"],
        ["geneA", "rs1"], ["geneA", "rs2"], ["geneA", "rs3"],
@@ -109,8 +109,11 @@ def test_constant_snp_dropped(tmp_path):
 def test_hardcall_rounding_and_universe(tmp_path):
     outs = run(tmp_path)
     geno = read_tsv_gz(outs["geno012"])
-    assert geno[0] == ["variant_id"] + S
-    rows = {r[0]: r[1:] for r in geno[1:]}
+    assert geno[0] == ["variant_id", "chromosome", "position", "ref", "alt"] + S
+    # allele annotation is carried through for each kept variant
+    annot = {r[0]: r[1:5] for r in geno[1:]}
+    assert annot["rs5"] == ["2", "201", "A", "C"]
+    rows = {r[0]: r[5:] for r in geno[1:]}
     # only the kept universe is written: rs1, rs3, rs5, rs7 (rs2, rs4, rs6 dropped)
     assert set(rows) == {"rs1", "rs3", "rs5", "rs7"}
     # rs5 dosages rounded to 0/1/2 (<0.5->0, [0.5,1.5)->1, >=1.5->2)
@@ -137,7 +140,8 @@ def test_without_eqtl_uses_input_order(tmp_path):
 
 def test_missing_genotype_errors(tmp_path):
     _write(tmp_path / "cis.tsv", [["gene_id", "variant_id"], ["geneA", "rsX"]])
-    _write(tmp_path / "geno.tsv", [["variant_id"] + S, ["rs1"] + [0] * 10])
+    _write(tmp_path / "geno.tsv", [["variant_id", "chromosome", "position", "ref", "alt"] + S,
+                                   ["rs1", "1", "101", "A", "G"] + [0] * 10])
     with pytest.raises(SystemExit, match="absent from the genotype"):
         lp.main(["--cis-features", str(tmp_path / "cis.tsv"),
                  "--genotype", str(tmp_path / "geno.tsv"),

@@ -107,7 +107,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--cis-features", required=True,
                    help="input: per-gene cis-SNP set (gene_id, variant_id)")
     p.add_argument("--genotype", required=True,
-                   help="input: harmonised dosage matrix (variant_id + sample columns)")
+                   help="input: harmonised dosage matrix "
+                        "(variant_id, chromosome, position, ref, alt, then sample columns)")
     p.add_argument("--eqtl", default=None,
                    help="input: harmonised eQTL table, used to order SNPs by p-value "
                         "(optional)")
@@ -172,14 +173,18 @@ def main(argv=None) -> None:
                             pass
 
     # ---- genotype: keep the cis universe, round to 0/1/2, standardise ------------------
+    # genotype columns: variant_id, chromosome, position, ref, alt, then one per sample.
     with _open(args.genotype) as fh:
         geno_header = _split(fh.readline(), d)
-        if geno_header[0] != args.variant_col:
-            raise SystemExit(f"The first column of the genotype matrix must be "
-                             f"'{args.variant_col}', but it is '{geno_header[0]}'.")
-        samples = geno_header[1:]
+        if geno_header[:5] != [args.variant_col, "chromosome", "position", "ref", "alt"]:
+            raise SystemExit(
+                "The genotype matrix must start with the columns "
+                f"'{args.variant_col}', 'chromosome', 'position', 'ref', 'alt', "
+                f"but it starts with {geno_header[:5]}.")
+        samples = geno_header[5:]
         hardcall: dict[str, np.ndarray] = {}     # variant -> 0/1/2 vector over samples
         std_vec: dict[str, np.ndarray] = {}      # variant -> standardised vector (or absent)
+        annot: dict[str, list[str]] = {}         # variant -> [chromosome, position, ref, alt]
         for line in fh:
             f = _split(line, d)
             if not f or f == [""]:
@@ -187,7 +192,8 @@ def main(argv=None) -> None:
             v = f[0]
             if v not in universe or v in hardcall:
                 continue
-            dosage = np.array(f[1:], dtype=np.float64)
+            annot[v] = f[1:5]
+            dosage = np.array(f[5:], dtype=np.float64)
             calls = np.clip(np.floor(dosage + 0.5), 0, 2).astype(np.uint8)
             hardcall[v] = calls
             sv = standardise(calls)
@@ -229,9 +235,10 @@ def main(argv=None) -> None:
     # ---- hard-call genotype for the kept SNP universe ----------------------------------
     geno_path = os.path.join(args.outdir, f"{args.tissue}.genotype_012.tsv.gz")
     with _open(geno_path, "wt") as fout:
-        fout.write(args.variant_col + d + d.join(samples) + "\n")
+        fout.write(d.join([args.variant_col, "chromosome", "position", "ref", "alt"]
+                          + samples) + "\n")
         for v in kept_universe:
-            fout.write(v + d + d.join(str(int(x)) for x in hardcall[v]) + "\n")
+            fout.write(d.join([v] + annot[v] + [str(int(x)) for x in hardcall[v]]) + "\n")
 
     # ---- QC report ---------------------------------------------------------------------
     qc_path = os.path.join(args.outdir, f"{args.tissue}.ld_prune_qc.tsv")
