@@ -43,3 +43,4 @@ installed once with `julia_project/install_biofindr.jl`. Julia 1.11.3 is require
 | 7. expression models (`bin/fit_expression_models.py`) | Python ≥ 3.9 + NumPy, NumPyro + JAX (MCMC), ArviZ (PSIS-LOO) |
 | 8. harmonise GWAS (`bin/harmonise_gwas.py`) | Python ≥ 3.9, standard library only |
 | 9. TWAS association (`bin/twas_association.py`) | Python ≥ 3.9 + NumPy |
+| 10. flux map (`bin/build_flux_map.py`) | Python ≥ 3.9 + NumPy |

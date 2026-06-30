@@ -326,3 +326,43 @@ Per tissue and trait it writes, under `results/association/`:
   `z_twas`, `z_cis`, `z_trans`, `sigma_g`, `p_value`, `p_adj`, `tissue`, `trait`.
 
 This step uses NumPy.
+
+---
+
+## Tenth step: disease-regulatory flux map
+
+The tenth stage attributes each disease gene's **trans** signal to the specific upstream
+regulators that deliver it (`bin/build_flux_map.py`). Because every trans SNP is a cis-eQTL of
+one or more of the gene's GRN ancestors, the gene's trans z decomposes exactly into
+per-regulator contributions. For a disease gene `g` (significant at `p_adj < assoc_fdr`) and a
+regulator `A` that feeds it:
+
+    flux(A → g) = (1/sigma_g) * sum_{s ∈ E(A) ∩ T(g)}  w_{g,s} * sd_s * z_gwas_s
+
+where `E(A)` is `A`'s cis-eQTL set and `T(g)` is `g`'s trans-feature set. A SNP that instruments
+several ancestors **splits its term evenly** among them, so the per-regulator fluxes recover the
+gene's trans z exactly: `sum_A flux(A → g) = z_trans(g)`. The flux is **signed** (positive = `A`'s
+genetics drive `g` toward the risk-increasing direction) and is an algebraic decomposition, not a
+fitted model.
+
+The map keeps the network **paths explicit** rather than collapsing them. Its nodes are the
+disease genes plus their hop-1 GRN parents and hop-2 grandparents (the single-hop GRN is recovered
+from the hop-1 trans features). Its edges are the true single-hop GRN edges along the paths down to
+a disease gene:
+
+- `parent → disease_gene` (hop 1);
+- `grandparent → intermediate_parent` (hop 2) — the intermediate parent is kept, not collapsed
+  into a `grandparent → disease_gene` shortcut.
+
+Each edge carries the signed flux its source delivers to the disease gene it feeds; a grandparent
+reaching a gene through several parents splits its flux evenly across those edges, so the fluxes
+toward a gene still sum to `z_trans(g)`. Every parent and grandparent is kept even when it delivers
+no flux (its `flux` is left blank).
+
+Per tissue and trait it writes, under `results/flux_map/`:
+
+- `flux_<tissue>_<trait>.tsv` — one row per edge: `source_gene`, `target_gene`, `disease_gene`,
+  `hop`, `n_snp`, `flux`, `sign`, `tissue`, `trait`. Together these signed edges are the directed
+  disease-regulatory flux network.
+
+This step uses NumPy. Like Steps 8–9, it runs only when a GWAS samplesheet is given.
