@@ -117,20 +117,23 @@ def load_expression(path: str, delim: str, gene_col: str, genes: set[str]):
 
 
 def load_genotype(path: str, delim: str, variant_col: str, wanted: set[str]):
-    """Return (samples, variant_id -> dosage vector) for the requested variants."""
+    """Return (samples, variant_id -> dosage vector) for the requested variants.
+
+    Genotype columns: variant_id, chromosome, position, ref, alt, then one per sample."""
     geno: dict[str, np.ndarray] = {}
     with _open(path) as fh:
         header = _split(fh.readline(), delim)
-        if header[0] != variant_col:
-            raise SystemExit(f"The first column of the genotype matrix must be "
-                             f"'{variant_col}', but it is '{header[0]}'.")
-        samples = header[1:]
+        if header[:5] != [variant_col, "chromosome", "position", "ref", "alt"]:
+            raise SystemExit(
+                f"The genotype matrix must start with the columns '{variant_col}', "
+                f"'chromosome', 'position', 'ref', 'alt', but it starts with {header[:5]}.")
+        samples = header[5:]
         for line in fh:
             f = _split(line, delim)
             if not f or f == [""]:
                 continue
             if f[0] in wanted and f[0] not in geno:
-                geno[f[0]] = np.array(f[1:], dtype=np.float64)
+                geno[f[0]] = np.array(f[5:], dtype=np.float64)
     return samples, geno
 
 

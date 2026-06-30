@@ -50,12 +50,12 @@ def build(d: Path):
                             ["geneA"] + list(np.round(geneA, 4)),
                             ["geneB"] + list(np.round(geneB, 4)),
                             ["geneC"] + list(np.round(geneC, 4))])
-    _write(d / "geno.tsv", [["variant_id"] + samples,
-                            ["csA1"] + list(csA1.astype(int)),
-                            ["csA2"] + list(csA2.astype(int)),
-                            ["csC"] + list(csC.astype(int)),
-                            ["trA"] + list(trA.astype(int)),
-                            ["trB"] + list(trB.astype(int))])
+    _write(d / "geno.tsv", [["variant_id", "chromosome", "position", "ref", "alt"] + samples,
+                            ["csA1", "1", "101", "A", "G"] + list(csA1.astype(int)),
+                            ["csA2", "1", "102", "C", "T"] + list(csA2.astype(int)),
+                            ["csC", "1", "103", "G", "A"] + list(csC.astype(int)),
+                            ["trA", "2", "201", "T", "C"] + list(trA.astype(int)),
+                            ["trB", "2", "202", "A", "G"] + list(trB.astype(int))])
     _write(d / "cis.tsv", [["gene_id", "variant_id"],
                            ["geneA", "csA1"], ["geneA", "csA2"], ["geneC", "csC"]])
     _write(d / "trans.tsv", [["gene_id", "hop", "source_gene_id", "variant_id"],
