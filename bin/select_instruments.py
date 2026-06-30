@@ -61,6 +61,12 @@ def _split(line: str, delim: str) -> list[str]:
     return line.rstrip("\n").split(delim)
 
 
+def _hardcall(dosage: str) -> str:
+    """Round an allele dosage in [0, 2] to a 0/1/2 hard call. BioFindr's causal tests need
+    the instrument genotype as integer categories, not continuous (imputed) dosages."""
+    return str(min(2, max(0, int(float(dosage) + 0.5))))
+
+
 # ------------------------------------------------------------------- lead instrument choice
 def select_leads(eqtl_rows, gene_i: int, var_i: int, beta_i: int, p_i: int):
     """Pick each gene's lead cis-eQTL from raw eQTL rows.
@@ -205,7 +211,7 @@ def main(argv=None) -> None:
     with _open(args.out_dg, "wt") as fout:
         fout.write(",".join(kept_variants) + "\n")
         for s in order:
-            fout.write(",".join(col[s] for col in kept_dosages) + "\n")
+            fout.write(",".join(_hardcall(col[s]) for col in kept_dosages) + "\n")
 
     with _open(args.out_de, "wt") as fout:
         fout.write("variant_id,gene_id\n")

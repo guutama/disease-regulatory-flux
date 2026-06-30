@@ -113,6 +113,19 @@ def test_dg_instruments_only_transposed_and_reordered(tmp_path):
     assert [r[col["rs2"]] for r in rows] == ["1", "1", "0"]
 
 
+def test_dg_hardcalls_dosages(tmp_path):
+    # imputed dosages must be rounded to 0/1/2: BioFindr's causal tests need integer genotypes
+    expr = [["gene_id", "S1", "S2", "S3"], ["geneA", 0.1, 0.2, 0.3], ["geneB", 1.0, 2.0, 3.0]]
+    geno = [["variant_id", "chromosome", "position", "ref", "alt", "S1", "S2", "S3"],
+            ["rs1", "1", "100", "A", "G", 0.4, 1.6, 2.0]]      # -> 0, 2, 2
+    eqtl = [["gene_id", "variant_id", "beta", "se", "pvalue"], ["geneA", "rs1", 0.5, 0.1, 1e-8]]
+    _write(tmp_path / "e.tsv", expr); _write(tmp_path / "g.tsv", geno); _write(tmp_path / "q.tsv", eqtl)
+    outs = run(tmp_path, tmp_path / "e.tsv", tmp_path / "g.tsv", tmp_path / "q.tsv")
+    dg = read_csv(outs["dg.csv"])
+    col = {name: i for i, name in enumerate(dg[0])}
+    assert [r[col["rs1"]] for r in dg[1:]] == ["0", "2", "2"]
+
+
 def test_dx_all_genes_transposed(tmp_path):
     expr, geno, eqtl = make_trio(tmp_path)
     outs = run(tmp_path, expr, geno, eqtl)
