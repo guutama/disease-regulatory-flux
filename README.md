@@ -33,14 +33,17 @@ All genes are kept: every expressed gene can be a **target** in the regulatory n
 
 ### 2. Genotype matrix — `genotype.tsv[.gz]`
 
-A variant-by-sample matrix of **alternate-allele dosages in [0, 2]**. The leading
-column(s) identify the variant (see *Variant identifiers* below); the remaining columns are
-the samples — the **same samples** as in the expression matrix.
+A variant-by-sample matrix of **alternate-allele dosages in [0, 2]**. The leading columns
+identify the variant and **must include `chromosome`, `position`, `ref` and `alt`** (the
+alternate allele the dosage counts), optionally with an `rsID`; the remaining columns are
+the samples — the **same samples** as in the expression matrix. The allele columns are
+carried through the whole pipeline so a GWAS can later be aligned to the alternate allele
+(see *Variant identifiers* below).
 
 ```
-rsID      S1     S2     S3
-rs1001    0.0    1.0    2.0
-rs1002    1.0    0.0    1.0
+rsID      chromosome  position  ref  alt   S1     S2     S3
+rs1001    1           1001      A    G     0.0    1.0    2.0
+rs1002    1           1002      C    T     1.0    0.0    1.0
 ```
 
 ### 3. eQTL map — `eqtl.tsv[.gz]`
@@ -63,6 +66,10 @@ The genotype and eQTL files must identify variants the **same way**:
 - if **both** files have an `rsID` column, variants are matched by rsID;
 - otherwise **both** must have `chromosome`, `position`, `ref`, `alt` columns, and variants
   are matched by `chr:pos:ref:alt`.
+
+Either way, the **genotype must always carry `chromosome`, `position`, `ref` and `alt`** (even
+when matching by rsID). These alleles are required and propagated through every stage so the
+GWAS-harmonisation step can align each variant to its alternate allele.
 
 ### How the files connect
 
@@ -121,6 +128,8 @@ The first stage aligns the inputs so the rest of the pipeline can rely on them
   method uses);
 - restricts both expression and genotype to the **samples they share**, in one consistent
   order;
+- carries the variant's `chromosome`, `position`, `ref` and `alt` through into the harmonised
+  genotype (`variant_id`, `chromosome`, `position`, `ref`, `alt`, then the samples);
 - writes a QC report of how many samples, genes and variants were kept.
 
 It stops with a clear error if the files don't share samples, or if no eQTL pair survives
@@ -199,8 +208,8 @@ exceeds `ld_r2_threshold` (default `0.7`, set in `nextflow.config`). Constant SN
 dropped. Per tissue it writes:
 
 - `<tissue>.cis_snps_pruned.tsv.gz` — the kept cis SNPs per gene (`gene_id`, `variant_id`);
-- `<tissue>.genotype_012.tsv.gz` — a 0/1/2 hard-call matrix (`variant_id` + samples) for the
-  kept SNPs;
+- `<tissue>.genotype_012.tsv.gz` — a 0/1/2 hard-call matrix (`variant_id`, `chromosome`,
+  `position`, `ref`, `alt`, then samples) for the kept SNPs;
 - `<tissue>.ld_prune_summary.tsv` — per gene: cis SNPs in, kept and dropped;
 - `<tissue>.ld_prune_qc.tsv` — tissue-level totals;
 
@@ -257,3 +266,28 @@ and `expr_seed`. Per tissue it writes, under `results/expression_models/`:
 - `<tissue>.expr_model_stats.tsv` — tissue-level counts and mean LOO-R² per channel.
 
 This step requires NumPyro and JAX (MCMC) and ArviZ (PSIS-LOO); see `docs/requirements.md`.
+
+---
+
+## Eighth step: GWAS harmonisation
+
+The eighth stage prepares a GWAS for the association by re-expressing every effect as the
+effect of the pipeline's **alternate allele** (`bin/harmonise_gwas.py`). The genotype counts
+the alternate allele and the predictor weights are in alternate-dosage units, so the GWAS must
+be aligned the same way. For each variant in the pipeline's universe (every tissue's
+`genotype_012`, which carries `chromosome`, `position`, `ref` and `alt`), the step finds the
+matching GWAS record by chromosome and position and aligns it:
+
+- effect on the alternate allele → `z = +beta/se`; effect on the reference allele → `z = -beta/se`;
+- effects reported on the complementary strand are resolved by complementing the GWAS alleles;
+- strand-ambiguous SNPs (A/T, C/G) and variants with no GWAS record are dropped.
+
+It writes, per trait, under `results/gwas/`:
+
+- `<trait>.gwas.tsv.gz` — one row per aligned variant: `variant_id`, `z`, `beta`, `se`,
+  `p_value`, `n`, with `z` and `beta` on the alternate-allele scale;
+- `<trait>.gwas_qc.tsv` — totals (variants aligned, dropped ambiguous, dropped unmatched).
+
+The GWAS column names default to the GWAS-Catalog harmonised layout (`chromosome`, `position`,
+`effect_allele`, `other_allele`, `beta`, `se`, `pvalue`, `n`) and can be overridden per cohort.
+This step uses only the Python standard library.
