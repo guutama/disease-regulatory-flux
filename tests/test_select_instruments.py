@@ -42,10 +42,10 @@ def make_trio(d: Path):
             ["geneB", 1.1, 1.2, 1.3],
             ["geneC", 2.1, 2.2, 2.3],
             ["geneD", 3.1, 3.2, 3.3]]
-    geno = [["variant_id", "S2", "S1", "S3"],     # sample order differs from expression
-            ["rs1", 1, 0, 2],                     # -> expression order S1,S2,S3 = 0,1,2
-            ["rs2", 1, 1, 0],                     # -> 1,1,0
-            ["rs3", 9, 9, 9]]                     # not a lead -> dropped
+    geno = [["variant_id", "chromosome", "position", "ref", "alt", "S2", "S1", "S3"],
+            ["rs1", "1", "101", "A", "G", 1, 0, 2],   # expression order S1,S2,S3 = 0,1,2
+            ["rs2", "1", "102", "C", "T", 1, 1, 0],   # -> 1,1,0
+            ["rs3", "2", "201", "G", "A", 9, 9, 9]]   # not a lead -> dropped
     eqtl = [["gene_id", "variant_id", "beta", "se", "pvalue"],
             ["geneA", "rs1", 0.5, 0.1, 1e-8],
             ["geneA", "rs2", -0.2, 0.1, 1e-3],
@@ -160,7 +160,8 @@ def test_empty_eqtl_errors(tmp_path):
 
 def test_sample_mismatch_errors(tmp_path):
     expr = [["gene_id", "A1", "A2"], ["geneA", 1, 2]]
-    geno = [["variant_id", "B1", "B2"], ["rs1", 0, 1]]
+    geno = [["variant_id", "chromosome", "position", "ref", "alt", "B1", "B2"],
+            ["rs1", "1", "101", "A", "G", 0, 1]]
     eqtl = [["gene_id", "variant_id", "beta", "se", "pvalue"], ["geneA", "rs1", 0.1, 0.1, 1e-3]]
     _write(tmp_path / "e.tsv", expr); _write(tmp_path / "g.tsv", geno); _write(tmp_path / "q.tsv", eqtl)
     with pytest.raises(SystemExit, match="same samples"):
@@ -169,7 +170,8 @@ def test_sample_mismatch_errors(tmp_path):
 
 def test_instrument_missing_from_genotype_errors(tmp_path):
     expr = [["gene_id", "S1", "S2"], ["geneA", 1, 2]]
-    geno = [["variant_id", "S1", "S2"], ["rsOTHER", 0, 1]]
+    geno = [["variant_id", "chromosome", "position", "ref", "alt", "S1", "S2"],
+            ["rsOTHER", "1", "101", "A", "G", 0, 1]]
     eqtl = [["gene_id", "variant_id", "beta", "se", "pvalue"], ["geneA", "rs1", 0.1, 0.1, 1e-3]]
     _write(tmp_path / "e.tsv", expr); _write(tmp_path / "g.tsv", geno); _write(tmp_path / "q.tsv", eqtl)
     with pytest.raises(SystemExit, match="absent from the genotype"):

@@ -149,12 +149,15 @@ def main(argv=None) -> None:
     instrument_variants = set(leads.values())
 
     # ---- dG: genotype of the instruments, transposed to samples x SNPs -----------------
+    # genotype columns: variant_id, chromosome, position, ref, alt, then one per sample.
     with _open(args.genotype) as fh:
         geno_header = _split(fh.readline(), d)
-        if geno_header[0] != args.variant_col:
-            raise SystemExit(f"The first column of the genotype matrix must be "
-                             f"'{args.variant_col}', but it is '{geno_header[0]}'.")
-        geno_samples = geno_header[1:]
+        if geno_header[:5] != [args.variant_col, "chromosome", "position", "ref", "alt"]:
+            raise SystemExit(
+                "The genotype matrix must start with the columns "
+                f"'{args.variant_col}', 'chromosome', 'position', 'ref', 'alt', "
+                f"but it starts with {geno_header[:5]}.")
+        geno_samples = geno_header[5:]
         kept_variants: list[str] = []
         kept_dosages: list[list[str]] = []   # one inner list per instrument SNP, over geno_samples
         for line in fh:
@@ -163,7 +166,7 @@ def main(argv=None) -> None:
                 continue
             if f[0] in instrument_variants:
                 kept_variants.append(f[0])
-                kept_dosages.append(f[1:])
+                kept_dosages.append(f[5:])
     missing = instrument_variants - set(kept_variants)
     if missing:
         raise SystemExit(f"{len(missing)} selected instrument(s) are absent from the genotype "
