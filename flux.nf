@@ -16,6 +16,9 @@
  *                                 (the trans channel) by walking the network per tissue.
  *   Step 7  FIT_EXPRESSION_MODELS -- fit channel-aware Bayesian expression models (cis /
  *                                 trans / cis+trans) per gene, per tissue.
+ *   Step 8  HARMONISE_GWAS      -- align a GWAS to the ALT allele (optional; per trait).
+ *   Step 9  TWAS_ASSOCIATION    -- summary-statistic TWAS with a cis/trans split (optional;
+ *                                 per tissue and trait).
  *
  * Input: a samplesheet CSV (--samplesheet) with a header and one row per tissue:
  *
@@ -36,6 +39,8 @@ include { SELECT_CIS_FEATURES } from './modules/local/select_cis_features.nf'
 include { LD_PRUNE           } from './modules/local/ld_prune.nf'
 include { TRANS_FEATURES     } from './modules/local/trans_features.nf'
 include { FIT_EXPRESSION_MODELS } from './modules/local/fit_expression_models.nf'
+include { HARMONISE_GWAS     } from './modules/local/harmonise_gwas.nf'
+include { TWAS_ASSOCIATION   } from './modules/local/twas_association.nf'
 
 workflow {
     if( !params.samplesheet )
@@ -75,4 +80,24 @@ workflow {
         .join(TRANS_FEATURES.out.trans_features)         // t, expr, cis_pruned, geno012, trans
         .map { t, expr, cis_pruned, geno012, trans -> tuple(t, expr, geno012, cis_pruned, trans) }
     FIT_EXPRESSION_MODELS(fit_in)
+
+    // association against GWAS traits (optional; runs only when --gwas-samplesheet is given).
+    if( params.gwas_samplesheet ) {
+        gwas_inputs = Channel
+            .fromPath(params.gwas_samplesheet, checkIfExists: true)
+            .splitCsv(header: true)
+            .map { row -> tuple(row.trait, file(row.gwas, checkIfExists: true)) }
+
+        // variant universe for GWAS alignment: every tissue's hard-call genotype.
+        variants = LD_PRUNE.out.pruned.map { t, cis_pruned, geno012 -> geno012 }.collect()
+        HARMONISE_GWAS(gwas_inputs, variants)
+
+        // each tissue's weights + genotype, crossed with each trait's harmonised GWAS.
+        weights_geno = FIT_EXPRESSION_MODELS.out.models
+            .map { t, metrics, weights -> tuple(t, weights) }
+            .join(LD_PRUNE.out.pruned.map { t, cis_pruned, geno012 -> tuple(t, geno012) })
+        assoc_in = weights_geno.combine(HARMONISE_GWAS.out.harmonised)
+            .map { t, weights, geno012, trait, gwas -> tuple(t, trait, weights, geno012, gwas) }
+        TWAS_ASSOCIATION(assoc_in)
+    }
 }
