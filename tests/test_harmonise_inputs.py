@@ -42,11 +42,11 @@ def make_rsid_trio(d: Path):
             ["geneB", 1.1, 1.2, 1.3, 1.4],
             ["geneC", 2.1, 2.2, 2.3, 2.4],
             ["geneD", 3.1, 3.2, 3.3, 3.4]]
-    geno = [["rsID", "S1", "S2", "S3", "S4"],
-            ["rs1", 0, 1, 2, 0],
-            ["rs2", 1, 1, 0, 2],
-            ["rs3", 2, 0, 1, 1],
-            ["rsX", 0, 0, 0, 0]]
+    geno = [["rsID", "chromosome", "position", "ref", "alt", "S1", "S2", "S3", "S4"],
+            ["rs1", "1", "100", "A", "G", 0, 1, 2, 0],
+            ["rs2", "1", "200", "C", "T", 1, 1, 0, 2],
+            ["rs3", "2", "300", "G", "A", 2, 0, 1, 1],
+            ["rsX", "2", "400", "T", "C", 0, 0, 0, 0]]
     eqtl = [["gene_id", "rsID", "beta", "se", "pvalue"],
             ["geneA", "rs1", 0.5, 0.1, 1e-8],
             ["geneA", "rs2", -0.2, 0.1, 1e-3],
@@ -102,7 +102,9 @@ def test_full_alignment(tmp_path):
 
     # samples: expr {S1,S2,S3,S5} ∩ geno {S1..S4} = {S1,S2,S3}, in expression order
     assert read_tsv(outs["oe"])[0] == ["gene_id", "S1", "S2", "S3"]
-    assert read_tsv(outs["og"])[0] == ["variant_id", "S1", "S2", "S3"]
+    # genotype carries the allele annotation (chrom/pos/ref/alt) before the samples
+    assert read_tsv(outs["og"])[0] == ["variant_id", "chromosome", "position", "ref",
+                                        "alt", "S1", "S2", "S3"]
 
     # ALL genes kept, incl. geneD which has no cis-eQTL (a target, not a regulator)
     genes = [r[0] for r in read_tsv(outs["oe"])[1:]]
@@ -119,9 +121,10 @@ def test_full_alignment(tmp_path):
 def test_value_passthrough_and_sample_reorder(tmp_path):
     expr, geno, eqtl = make_rsid_trio(tmp_path)
     outs = run(tmp_path, expr, geno, eqtl)
-    # geneA dosages for S1,S2,S3 unchanged; S4 column dropped
+    # geneA dosages for S1,S2,S3 unchanged; S4 column dropped (alleles in cols 1-4)
     rs1 = next(r for r in read_tsv(outs["og"])[1:] if r[0] == "rs1")
-    assert rs1[1:] == ["0", "1", "2"]
+    assert rs1[1:5] == ["1", "100", "A", "G"]
+    assert rs1[5:] == ["0", "1", "2"]
     # geneA expression for S1,S2,S3 unchanged; S5 (no genotype) dropped
     geneA = next(r for r in read_tsv(outs["oe"])[1:] if r[0] == "geneA")
     assert geneA[1:] == ["0.1", "0.2", "0.3"]
@@ -157,10 +160,22 @@ def test_gzip_roundtrip(tmp_path):
 
 def test_empty_sample_overlap_errors(tmp_path):
     expr = [["gene_id", "A1", "A2"], ["geneA", 1, 2]]
-    geno = [["rsID", "B1", "B2"], ["rs1", 0, 1]]
+    geno = [["rsID", "chromosome", "position", "ref", "alt", "B1", "B2"],
+            ["rs1", "1", "100", "A", "G", 0, 1]]
     eqtl = [["gene_id", "rsID", "beta", "se", "pvalue"], ["geneA", "rs1", 0.1, 0.1, 1e-3]]
     _write(tmp_path / "e.tsv", expr); _write(tmp_path / "g.tsv", geno); _write(tmp_path / "q.tsv", eqtl)
     with pytest.raises(SystemExit, match="samples"):
+        run(tmp_path, tmp_path / "e.tsv", tmp_path / "g.tsv", tmp_path / "q.tsv")
+
+
+def test_missing_allele_columns_errors(tmp_path):
+    # rsID keying resolves, but the genotype lacks chrom/pos/ref/alt: now an error,
+    # because the alleles are required for downstream GWAS harmonisation.
+    expr = [["gene_id", "S1", "S2"], ["geneA", 1, 2]]
+    geno = [["rsID", "S1", "S2"], ["rs1", 0, 1]]
+    eqtl = [["gene_id", "rsID", "beta", "se", "pvalue"], ["geneA", "rs1", 0.1, 0.1, 1e-3]]
+    _write(tmp_path / "e.tsv", expr); _write(tmp_path / "g.tsv", geno); _write(tmp_path / "q.tsv", eqtl)
+    with pytest.raises(SystemExit, match="allele-annotation"):
         run(tmp_path, tmp_path / "e.tsv", tmp_path / "g.tsv", tmp_path / "q.tsv")
 
 

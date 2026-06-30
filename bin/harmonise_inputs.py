@@ -103,10 +103,12 @@ def variant_id_getter(header: list[str], key_type: str, args) -> Callable[[list[
 
 
 def id_columns(key_type: str, args) -> set[str]:
-    """The non-sample identifier columns of the genotype matrix, given the key type."""
+    """The non-sample identifier columns of the genotype matrix: the variant key plus
+    the chrom/pos/ref/alt allele annotation that is always carried alongside it."""
+    alleles = {args.chrom_col, args.pos_col, args.ref_col, args.alt_col}
     if key_type == "rsid":
-        return {args.rsid_col}
-    return {args.chrom_col, args.pos_col, args.ref_col, args.alt_col}
+        return {args.rsid_col} | alleles
+    return alleles
 
 
 # ------------------------------------------------------------------------------ readers
@@ -217,6 +219,17 @@ def main(argv=None) -> None:
     eqtl_header = read_header(args.eqtl, d)
     key_type = resolve_key_type(geno_header, eqtl_header, args)
 
+    # chrom/pos/ref/alt must be present so each variant can later be aligned to a GWAS
+    # by its alleles, whatever variant key is used above. They are carried through to
+    # the genotype output and on to the downstream stages.
+    allele_cols = (args.chrom_col, args.pos_col, args.ref_col, args.alt_col)
+    missing_allele = [c for c in allele_cols if c not in geno_header]
+    if missing_allele:
+        raise SystemExit(
+            "The genotype matrix must carry the allele-annotation columns "
+            f"{list(allele_cols)} so variants can be aligned to a GWAS downstream.\n"
+            f"  missing: {missing_allele}\n  genotype columns: {geno_header}")
+
     eqtl_rows, eqtl_genes, eqtl_variants = read_eqtl(args.eqtl, args, key_type)
     expr_genes = read_gene_set(args.expression, d)
 
@@ -234,11 +247,14 @@ def main(argv=None) -> None:
     get_vid = variant_id_getter(geno_header, key_type, args)
     geno_idx = {c: i for i, c in enumerate(geno_header)}
     keep_col_idx = [geno_idx[s] for s in keep_samples]
+    ci, pi, ri, ai = (geno_idx[args.chrom_col], geno_idx[args.pos_col],
+                      geno_idx[args.ref_col], geno_idx[args.alt_col])
     kept_variants: set[str] = set()
     n_geno_total = 0
     with _open(args.genotype) as fin, _open(args.out_genotype, "wt") as fout:
         fin.readline()
-        fout.write(d.join(["variant_id"] + keep_samples) + "\n")
+        fout.write(d.join(["variant_id", "chromosome", "position", "ref", "alt"]
+                          + keep_samples) + "\n")
         for line in fin:
             f = _split(line, d)
             if not f or f == [""]:
@@ -248,7 +264,8 @@ def main(argv=None) -> None:
             if vid not in eqtl_variants:
                 continue
             kept_variants.add(vid)
-            fout.write(d.join([vid] + [f[i] for i in keep_col_idx]) + "\n")
+            fout.write(d.join([vid, f[ci], f[pi], f[ri], f[ai]]
+                              + [f[i] for i in keep_col_idx]) + "\n")
     if not kept_variants:
         raise SystemExit("The genotype matrix and the eQTL table share no variants. "
                          "Check that their variant identifiers match.")
