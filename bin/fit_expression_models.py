@@ -199,7 +199,7 @@ def fit(method: str, Xstd: np.ndarray, channel: np.ndarray, n_ch: int, yc: np.nd
 
     Returns the posterior-mean coefficients (standardised-X space), the LOO-R^2 (from the
     PSIS-weighted leave-one-out predictions), the in-sample R^2, the elpd and its Pareto-k
-    diagnostic. Mirrors the reference fit so a run reproduces the trained models."""
+    diagnostic."""
     import jax
     import jax.numpy as jnp
     from numpyro.infer import MCMC, NUTS, log_likelihood
