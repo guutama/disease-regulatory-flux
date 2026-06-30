@@ -291,3 +291,38 @@ It writes, per trait, under `results/gwas/`:
 The GWAS column names default to the GWAS-Catalog harmonised layout (`chromosome`, `position`,
 `effect_allele`, `other_allele`, `beta`, `se`, `pvalue`, `n`) and can be overridden per cohort.
 This step uses only the Python standard library.
+
+Steps 8 and 9 are **optional**: they run only when a GWAS samplesheet is given. It is a small
+CSV with a header and one row per trait, naming each trait's raw summary-statistics file:
+
+```
+trait,gwas
+CAD,/data/cad_gwas.tsv.gz
+```
+
+Pass it with `--gwas-samplesheet gwas.csv`; without it the pipeline stops after Step 7.
+
+---
+
+## Ninth step: TWAS association
+
+The ninth stage tests each gene's genetically predicted expression for association with the
+trait (`bin/twas_association.py`). For every gene it combines the predictor's ALT-dosage
+weights (Step 7) with the ALT-aligned GWAS (Step 8):
+
+    z_TWAS = ( sum_j  w_j * sd_j * z_gwas_j ) / sigma_g
+
+where `w_j` is SNP `j`'s weight, `sd_j` its genotype standard deviation, `z_gwas_j` the GWAS
+z of its alternate allele, and `sigma_g` the spread of the predicted expression over the
+genotypes (the LD/variance term — no external panel needed). Restricting the numerator to the
+cis or the trans SNPs gives a **cis and a trans component that sum to z_TWAS**, so each gene's
+association is split into the part carried by its own cis genetics and the part delivered
+through the network. A two-sided p-value comes from the standard normal, and a
+Benjamini-Hochberg FDR is applied per tissue.
+
+Per tissue and trait it writes, under `results/association/`:
+
+- `association_<tissue>_<trait>.tsv` — one row per gene: `gene_id`, `config`, SNP counts,
+  `z_twas`, `z_cis`, `z_trans`, `sigma_g`, `p_value`, `p_adj`, `tissue`, `trait`.
+
+This step uses NumPy.
