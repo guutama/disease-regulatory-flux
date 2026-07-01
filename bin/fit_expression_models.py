@@ -54,6 +54,17 @@ from typing import TextIO
 
 import numpy as np
 
+# ArviZ 0.17 (the newest for Python 3.9) imports scipy.signal.gaussian, which moved to
+# scipy.signal.windows in SciPy >= 1.13. Re-expose it here, before ArviZ is imported, so the
+# PSIS-LOO scoring loads whether the run environment has an older or newer SciPy.
+try:
+    import scipy.signal as _signal
+    from scipy.signal import windows as _windows
+    if not hasattr(_signal, "gaussian"):
+        _signal.gaussian = _windows.gaussian
+except Exception:
+    pass
+
 PRED_THRESHOLD = 0.01
 _MODEL_CACHE: dict = {}
 
