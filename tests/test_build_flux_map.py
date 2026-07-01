@@ -41,9 +41,14 @@ GENO = [["variant_id", "chromosome", "position", "ref", "alt"] + S,
         ["s3", "2", "201", "G", "A"] + D3]
 
 # trans weights of geneG: s1 (from P1) and s3 (from GP) are weighted; s2 (P2) is not.
+# Only the selected config (cis_trans) is used; the trans_only decoy must be ignored.
 WEIGHTS = [["gene_id", "method", "config", "channel", "variant_id", "weight"],
-           ["geneG", "horseshoe", "cis_trans", "trans", "s1", "0.5"],
-           ["geneG", "horseshoe", "cis_trans", "trans", "s3", "-0.3"]]
+           ["geneG", "horseshoe", "cis_trans",  "trans", "s1", "0.5"],
+           ["geneG", "horseshoe", "cis_trans",  "trans", "s3", "-0.3"],
+           ["geneG", "horseshoe", "trans_only", "trans", "s1", "99.0"]]   # decoy
+
+SELECTED = [["gene_id", "gene_class", "best_config", "best_loo_r2", "best_elpd", "n_cis", "n_trans"],
+            ["geneG", "both", "cis_trans", "0.1", "-1", "0", "2"]]
 
 # trans features: g's parents P1 (via s1) and P2 (via s2); g's grandparent GP (via s3).
 # P1's own parent is GP (so the GP -> P1 -> g path exists).
@@ -80,7 +85,9 @@ def run(d: Path):
     _write(d / "trans.tsv.gz", TRANS)
     _write(d / "assoc.tsv", ASSOC)
     _write(d / "gwas.tsv.gz", GWAS)
+    _write(d / "sel.tsv", SELECTED)
     fm.main(["--association", str(d / "assoc.tsv"), "--weights", str(d / "w.tsv.gz"),
+             "--selected", str(d / "sel.tsv"),
              "--trans-features", str(d / "trans.tsv.gz"), "--genotype", str(d / "geno.tsv.gz"),
              "--gwas", str(d / "gwas.tsv.gz"), "--tissue", "T", "--trait", "CADtest",
              "--outdir", str(d)])

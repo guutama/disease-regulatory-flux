@@ -95,26 +95,29 @@ workflow {
         variants = LD_PRUNE.out.pruned.map { t, cis_pruned, geno012 -> geno012 }.collect()
         HARMONISE_GWAS(gwas_inputs, variants)
 
-        // each tissue's weights + genotype, crossed with each trait's harmonised GWAS.
+        // each tissue's weights + selected config + genotype, crossed with each trait's GWAS.
         weights_geno = FIT_EXPRESSION_MODELS.out.models
             .map { t, metrics, weights -> tuple(t, weights) }
+            .join(FIT_EXPRESSION_MODELS.out.selected)                            // t, weights, selected
             .join(LD_PRUNE.out.pruned.map { t, cis_pruned, geno012 -> tuple(t, geno012) })
         assoc_in = weights_geno.combine(HARMONISE_GWAS.out.harmonised)
-            .map { t, weights, geno012, trait, gwas -> tuple(t, trait, weights, geno012, gwas) }
+            .map { t, weights, selected, geno012, trait, gwas ->
+                   tuple(t, trait, weights, selected, geno012, gwas) }
         TWAS_ASSOCIATION(assoc_in)
 
         // flux map: decompose each disease gene's trans signal into per-regulator edges.
-        // per tissue: weights, trans features and genotype.
+        // per tissue: weights, selected config, trans features and genotype.
         tissue_bundle = FIT_EXPRESSION_MODELS.out.models.map { t, metrics, weights -> tuple(t, weights) }
-            .join(TRANS_FEATURES.out.trans_features)                              // t, weights, trans
+            .join(FIT_EXPRESSION_MODELS.out.selected)                            // t, weights, selected
+            .join(TRANS_FEATURES.out.trans_features)                            // + trans
             .join(LD_PRUNE.out.pruned.map { t, cis_pruned, geno012 -> tuple(t, geno012) })
-        flux_in = TWAS_ASSOCIATION.out.association                                // t, trait, assoc
-            .combine(tissue_bundle, by: 0)                                        // + weights, trans, geno
-            .map { t, trait, assoc, weights, trans, geno012 ->
-                   tuple(trait, t, assoc, weights, trans, geno012) }
-            .combine(HARMONISE_GWAS.out.harmonised, by: 0)                        // join GWAS by trait
-            .map { trait, t, assoc, weights, trans, geno012, gwas ->
-                   tuple(t, trait, assoc, weights, trans, geno012, gwas) }
+        flux_in = TWAS_ASSOCIATION.out.association                              // t, trait, assoc
+            .combine(tissue_bundle, by: 0)                                      // + weights, selected, trans, geno
+            .map { t, trait, assoc, weights, selected, trans, geno012 ->
+                   tuple(trait, t, assoc, weights, selected, trans, geno012) }
+            .combine(HARMONISE_GWAS.out.harmonised, by: 0)                      // join GWAS by trait
+            .map { trait, t, assoc, weights, selected, trans, geno012, gwas ->
+                   tuple(t, trait, assoc, weights, selected, trans, geno012, gwas) }
         BUILD_FLUX_MAP(flux_in)
     }
 }

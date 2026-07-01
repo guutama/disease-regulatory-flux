@@ -82,12 +82,31 @@ def load_association(path, delim, gene_col, fdr):
     return sig
 
 
-def load_trans_weights(path, delim, gene_col, variant_col):
-    """gene_id -> {variant_id: weight} restricted to the trans channel."""
+def load_selected(path, delim, gene_col):
+    """gene_id -> selected (winning) config, for the predictable genes only."""
+    sel: dict[str, str] = {}
+    with _open(path) as fh:
+        header = _split(fh.readline(), delim)
+        gi = _col(header, gene_col, "selected")
+        ci = _col(header, "best_config", "selected")
+        for line in fh:
+            f = _split(line, delim)
+            if not f or f == [""]:
+                continue
+            sel[f[gi]] = f[ci]
+    return sel
+
+
+def load_trans_weights(path, delim, gene_col, variant_col, selected):
+    """gene_id -> {variant_id: weight} for the trans channel of each gene's SELECTED config.
+
+    The weights file holds every fitted configuration; we keep only the trans rows of the
+    winning config, so the flux uses the same predictor the association did."""
     w: dict[str, dict[str, float]] = defaultdict(dict)
     with _open(path) as fh:
         header = _split(fh.readline(), delim)
         gi = _col(header, gene_col, "weights")
+        ci = _col(header, "config", "weights")
         chi = _col(header, "channel", "weights")
         vi = _col(header, variant_col, "weights")
         wi = _col(header, "weight", "weights")
@@ -95,7 +114,7 @@ def load_trans_weights(path, delim, gene_col, variant_col):
             f = _split(line, delim)
             if not f or f == [""]:
                 continue
-            if f[chi] == "trans":
+            if f[chi] == "trans" and selected.get(f[gi]) == f[ci]:
                 w[f[gi]][f[vi]] = float(f[wi])
     return w
 
@@ -186,6 +205,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--association", required=True, help="input: Step 9 association table")
     p.add_argument("--weights", required=True, help="input: expr_model_weights matrix")
+    p.add_argument("--selected", required=True,
+                   help="input: expr_model_selected table (each predictable gene's best config)")
     p.add_argument("--trans-features", required=True, help="input: trans_features table")
     p.add_argument("--genotype", required=True, help="input: genotype_012 hard-call matrix")
     p.add_argument("--gwas", required=True, help="input: ALT-aligned GWAS (Step 8)")
@@ -216,7 +237,8 @@ def main(argv=None) -> None:
     d = args.delimiter
 
     sig = load_association(args.association, d, args.gene_col, args.fdr)
-    trans_w = load_trans_weights(args.weights, d, args.gene_col, args.variant_col)
+    selected = load_selected(args.selected, d, args.gene_col)
+    trans_w = load_trans_weights(args.weights, d, args.gene_col, args.variant_col, selected)
     per_gene, parents = load_trans_features(args.trans_features, d, args.gene_col, args.variant_col)
 
     wanted = {v for g in sig for _, _, v in per_gene.get(g, [])}

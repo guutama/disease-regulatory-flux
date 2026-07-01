@@ -25,8 +25,8 @@ process BUILD_FLUX_MAP {
     time   '2h'
 
     input:
-    tuple val(tissue), val(trait), path(association), path(weights), path(trans_features),
-          path(genotype), path(gwas)
+    tuple val(tissue), val(trait), path(association), path(weights), path(selected),
+          path(trans_features), path(genotype), path(gwas)
 
     output:
     tuple val(tissue), val(trait), path("flux_${tissue}_${trait}.tsv"), emit: flux
@@ -36,6 +36,7 @@ process BUILD_FLUX_MAP {
     build_flux_map.py \\
         --association     ${association} \\
         --weights         ${weights} \\
+        --selected        ${selected} \\
         --trans-features  ${trans_features} \\
         --genotype        ${genotype} \\
         --gwas            ${gwas} \\

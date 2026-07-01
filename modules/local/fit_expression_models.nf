@@ -31,7 +31,7 @@ process FIT_EXPRESSION_MODELS {
     output:
     tuple val(tissue), path("${tissue}.expr_model_metrics.tsv.gz"),
                        path("${tissue}.expr_model_weights.tsv.gz"),  emit: models
-    path  "${tissue}.expr_model_selected.tsv",                       emit: selected
+    tuple val(tissue), path("${tissue}.expr_model_selected.tsv"),    emit: selected
     path  "${tissue}.expr_model_stats.tsv",                          emit: stats
 
     script:

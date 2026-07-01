@@ -55,10 +55,27 @@ def _col(header: list[str], name: str, what: str) -> int:
     return header.index(name)
 
 
-def load_weights(path, delim, gene_col, variant_col):
-    """gene_id -> (config, [(channel, variant_id, weight), ...]) in first-seen gene order."""
+def load_selected(path, delim, gene_col):
+    """gene_id -> selected (winning) config, for the predictable genes only."""
+    sel: dict[str, str] = {}
+    with _open(path) as fh:
+        header = _split(fh.readline(), delim)
+        gi = _col(header, gene_col, "selected")
+        ci = _col(header, "best_config", "selected")
+        for line in fh:
+            f = _split(line, delim)
+            if not f or f == [""]:
+                continue
+            sel[f[gi]] = f[ci]
+    return sel
+
+
+def load_weights(path, delim, gene_col, variant_col, selected):
+    """gene_id -> [(channel, variant_id, weight), ...] in first-seen gene order.
+
+    The weights file holds every fitted configuration; we keep only the rows of each
+    predictable gene's selected config, so the predictor is a single coherent model."""
     genes: "OrderedDict[str, list]" = OrderedDict()
-    config: dict[str, str] = {}
     with _open(path) as fh:
         header = _split(fh.readline(), delim)
         gi = _col(header, gene_col, "weights")
@@ -71,9 +88,10 @@ def load_weights(path, delim, gene_col, variant_col):
             if not f or f == [""]:
                 continue
             g = f[gi]
+            if selected.get(g) != f[ci]:
+                continue
             genes.setdefault(g, []).append((f[chi], f[vi], float(f[wi])))
-            config.setdefault(g, f[ci])
-    return genes, config
+    return genes
 
 
 def load_genotype(path, delim, variant_col, wanted):
@@ -131,6 +149,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--weights", required=True, help="input: expr_model_weights matrix")
+    p.add_argument("--selected", required=True,
+                   help="input: expr_model_selected table (each predictable gene's best config)")
     p.add_argument("--genotype", required=True, help="input: genotype_012 hard-call matrix")
     p.add_argument("--gwas", required=True, help="input: ALT-aligned GWAS (Stage 8)")
     p.add_argument("--tissue", required=True, help="tissue label")
@@ -150,7 +170,8 @@ def main(argv=None) -> None:
     args = parse_args(argv)
     d = args.delimiter
 
-    genes, config = load_weights(args.weights, d, args.gene_col, args.variant_col)
+    selected = load_selected(args.selected, d, args.gene_col)
+    genes = load_weights(args.weights, d, args.gene_col, args.variant_col, selected)
     wanted = {v for rows in genes.values() for _, v, _ in rows}
     geno = load_genotype(args.genotype, d, args.variant_col, wanted)
     sd = {v: float(g.std()) for v, g in geno.items()}
@@ -187,7 +208,7 @@ def main(argv=None) -> None:
         z_trans = num_trans / sigma_g
         z_twas = z_cis + z_trans
         p_value = math.erfc(abs(z_twas) / _SQRT2)
-        records.append(dict(gene_id=gene, config=config[gene], n_snp=len(snps),
+        records.append(dict(gene_id=gene, config=selected[gene], n_snp=len(snps),
                             n_cis=n_cis, n_trans=n_trans, n_gwas=n_gwas,
                             z_twas=z_twas, z_cis=z_cis, z_trans=z_trans,
                             sigma_g=sigma_g, p_value=p_value))

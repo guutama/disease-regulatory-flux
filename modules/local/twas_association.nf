@@ -20,7 +20,7 @@ process TWAS_ASSOCIATION {
     time   '2h'
 
     input:
-    tuple val(tissue), val(trait), path(weights), path(genotype), path(gwas)
+    tuple val(tissue), val(trait), path(weights), path(selected), path(genotype), path(gwas)
 
     output:
     tuple val(tissue), val(trait), path("association_${tissue}_${trait}.tsv"), emit: association
@@ -29,6 +29,7 @@ process TWAS_ASSOCIATION {
     """
     twas_association.py \\
         --weights    ${weights} \\
+        --selected   ${selected} \\
         --genotype   ${genotype} \\
         --gwas       ${gwas} \\
         --tissue     ${tissue} \\

@@ -33,12 +33,23 @@ GENO = [["variant_id", "chromosome", "position", "ref", "alt"] + S,
         ["v2", "2", "201", "C", "T"] + V2,
         ["v3", "3", "301", "G", "A"] + V3]
 
-# weights: one block per predictable gene, channel in {cis, trans}
+# weights: the file carries ALL fitted configs per gene; only the selected one is used.
+# The 99.0 decoy rows are in non-selected configs and must be ignored.
 WEIGHTS = [["gene_id", "method", "config", "channel", "variant_id", "weight"],
-           ["geneA", "horseshoe", "cis_trans", "cis",   "v1", "0.5"],
-           ["geneA", "horseshoe", "cis_trans", "trans", "v2", "-0.3"],
-           ["geneB", "horseshoe", "cis_only",  "cis",   "v1", "0.8"],
-           ["geneC", "horseshoe", "cis_only",  "cis",   "v3", "0.4"]]
+           ["geneA", "horseshoe", "cis_trans",  "cis",   "v1", "0.5"],
+           ["geneA", "horseshoe", "cis_trans",  "trans", "v2", "-0.3"],
+           ["geneA", "horseshoe", "cis_only",   "cis",   "v1", "99.0"],   # decoy
+           ["geneA", "horseshoe", "trans_only", "trans", "v2", "99.0"],   # decoy
+           ["geneB", "horseshoe", "cis_only",   "cis",   "v1", "0.8"],
+           ["geneB", "horseshoe", "cis_trans",  "cis",   "v1", "99.0"],   # decoy
+           ["geneC", "horseshoe", "cis_only",   "cis",   "v3", "0.4"],
+           ["geneD", "horseshoe", "cis_only",   "cis",   "v1", "0.7"]]    # not predictable
+
+# selected config per predictable gene (geneD is absent -> not predictable -> not tested)
+SELECTED = [["gene_id", "gene_class", "best_config", "best_loo_r2", "best_elpd", "n_cis", "n_trans"],
+            ["geneA", "both", "cis_trans", "0.1", "-1", "1", "1"],
+            ["geneB", "cis", "cis_only",  "0.1", "-1", "1", "0"],
+            ["geneC", "cis", "cis_only",  "0.1", "-1", "1", "0"]]
 
 # harmonised GWAS: variant_id, z, beta, se, p_value, n  (v3 absent -> geneC has no match)
 GWAS = [["variant_id", "z", "beta", "se", "p_value", "n"],
@@ -58,9 +69,10 @@ def run(d: Path):
     _write(d / "geno.tsv.gz", GENO)
     _write(d / "w.tsv.gz", WEIGHTS)
     _write(d / "gwas.tsv.gz", GWAS)
+    _write(d / "sel.tsv", SELECTED)
     ta.main(["--weights", str(d / "w.tsv.gz"), "--genotype", str(d / "geno.tsv.gz"),
-             "--gwas", str(d / "gwas.tsv.gz"), "--tissue", "T", "--trait", "CADtest",
-             "--outdir", str(d)])
+             "--gwas", str(d / "gwas.tsv.gz"), "--selected", str(d / "sel.tsv"),
+             "--tissue", "T", "--trait", "CADtest", "--outdir", str(d)])
     out = d / "association_T_CADtest.tsv"
     rows = [ln.split("\t") for ln in out.read_text().splitlines()]
     header = rows[0]
@@ -125,3 +137,10 @@ def test_bh_fdr_monotone(tmp_path):
     adj = [a for _, a in pairs]
     assert all(adj[i] <= adj[i + 1] + 1e-12 for i in range(len(adj) - 1))
     assert all(a >= p - 1e-12 for p, a in pairs)
+
+
+def test_uses_only_selected_config_and_predictable(tmp_path):
+    res = {r["gene_id"]: r for r in run(tmp_path)}
+    assert "geneD" not in res                       # absent from selected -> not tested
+    assert res["geneA"]["config"] == "cis_trans"    # the selected config is reported
+    assert res["geneB"]["config"] == "cis_only"
