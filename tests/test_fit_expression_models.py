@@ -117,10 +117,12 @@ def test_predictability(ridge):
 
 def test_weights_and_selected_contract(ridge):
     w = read_gz(ridge["weights"])
-    assert w[0] == ["gene_id", "method", "config", "channel", "variant_id", "weight"]
+    assert w[0] == ["gene_id", "method", "config", "channel", "variant_id",
+                    "chromosome", "position", "ref", "alt", "weight"]
     for r in w[1:]:
         assert r[1] == "bayes_ridge"
-        float(r[5])
+        assert r[5] and r[7] and r[8]      # chromosome, ref, alt carried through
+        float(r[9])                        # weight
     csa = {r[4] for r in w[1:] if r[0] == "geneA" and r[2] == "cis_only"}
     assert csa == {"csA1", "csA2"}
     sel = read_tsv(ridge["selected"])
@@ -149,3 +151,13 @@ def test_bslmm_runs(tmp_path):
     m = metrics_by_gene(outs["metrics"])
     assert m["geneB"]["best_config"] == "trans_only"
     assert all(r[1] == "bslmm" for r in read_gz(outs["weights"])[1:])
+
+
+def test_variant_map_overrides_alleles(tmp_path):
+    # load_variant_map keys variant_id -> (chrom, pos, ref, alt) so the written weights can
+    # take alleles from an external mapping file instead of the genotype's own columns.
+    p = tmp_path / "map.tsv"
+    p.write_text("variant_id\tchromosome\tposition\tref\talt\n"
+                 "csA1\t9\t500\tT\tC\n")
+    m = fm.load_variant_map(str(p), "\t", "variant_id")
+    assert m["csA1"] == ("9", "500", "T", "C")

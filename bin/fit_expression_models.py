@@ -35,8 +35,9 @@ Output (in --outdir), for tissue <tissue>:
                                       the gene class, the selected config, the selected
                                       model's genetic standard deviation and intercept, and
                                       whether the gene is predictable;
-  <tissue>.expr_model_weights.tsv.gz  long posterior-mean raw-dosage weights:
-                                      gene_id, method, config, channel, variant_id, weight;
+  <tissue>.expr_model_weights.tsv.gz  long posterior-mean raw-dosage weights: gene_id, method,
+                                      config, channel, variant_id, chromosome, position, ref, alt,
+                                      weight (alleles carried so a foreign cohort can align);
   <tissue>.expr_model_selected.tsv    the predictable genes and their selected config;
   <tissue>.expr_model_stats.tsv       tissue-level counts and mean LOO-R^2 per channel.
 
@@ -128,10 +129,11 @@ def load_expression(path: str, delim: str, gene_col: str, genes: set[str]):
 
 
 def load_genotype(path: str, delim: str, variant_col: str, wanted: set[str]):
-    """Return (samples, variant_id -> dosage vector) for the requested variants.
-
-    Genotype columns: variant_id, chromosome, position, ref, alt, then one per sample."""
+    """Return (samples, variant_id -> dosage vector, variant_id -> (chrom, pos, ref, alt))
+    for the requested variants. Genotype columns: variant_id, chromosome, position, ref, alt,
+    then one per sample."""
     geno: dict[str, np.ndarray] = {}
+    alleles: dict[str, tuple] = {}
     with _open(path) as fh:
         header = _split(fh.readline(), delim)
         if header[:5] != [variant_col, "chromosome", "position", "ref", "alt"]:
@@ -145,7 +147,25 @@ def load_genotype(path: str, delim: str, variant_col: str, wanted: set[str]):
                 continue
             if f[0] in wanted and f[0] not in geno:
                 geno[f[0]] = np.array(f[5:], dtype=np.float64)
-    return samples, geno
+                alleles[f[0]] = (f[1], f[2], f[3], f[4])
+    return samples, geno, alleles
+
+
+def load_variant_map(path: str, delim: str, key_col: str):
+    """variant_id -> (chromosome, position, ref, alt) from a mapping file. Used to attach
+    alleles from an external annotation instead of the genotype's own allele columns."""
+    m: dict[str, tuple] = {}
+    with _open(path) as fh:
+        header = _split(fh.readline(), delim)
+        ki = _col(header, key_col, "variant-map")
+        ci, pi = _col(header, "chromosome", "variant-map"), _col(header, "position", "variant-map")
+        ri, ai = _col(header, "ref", "variant-map"), _col(header, "alt", "variant-map")
+        for line in fh:
+            f = _split(line, delim)
+            if not f or f == [""]:
+                continue
+            m[f[ki]] = (f[ci], f[pi], f[ri], f[ai])
+    return m
 
 
 # --------------------------------------------------------------- channel-aware prior models
@@ -290,6 +310,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--gene-col", default="gene_id", help="gene-id column (default: gene_id)")
     p.add_argument("--variant-col", default="variant_id",
                    help="variant-id column (default: variant_id)")
+    p.add_argument("--variant-map", default=None,
+                   help="optional variant_id -> chromosome/position/ref/alt mapping; when given, "
+                        "the written weights take alleles from it instead of the genotype's own "
+                        "allele columns")
+    p.add_argument("--variant-map-col", default="variant_id",
+                   help="variant-id column name in --variant-map (default: variant_id)")
     a = p.parse_args(argv)
     if a.delimiter == "\\t":
         a.delimiter = "\t"
@@ -320,7 +346,10 @@ def main(argv=None) -> None:
         universe.update(trans_map.get(g, ()))
 
     expr_samples, expr = load_expression(args.expression, d, args.gene_col, set(genes))
-    geno_samples, geno = load_genotype(args.genotype, d, args.variant_col, universe)
+    geno_samples, geno, alleles = load_genotype(args.genotype, d, args.variant_col, universe)
+    if args.variant_map:                       # take alleles from the mapping file
+        vmap = load_variant_map(args.variant_map, d, args.variant_map_col)
+        alleles = {v: vmap.get(v, alleles[v]) for v in alleles}
 
     geno_pos = {s: i for i, s in enumerate(geno_samples)}
     common = [s for s in expr_samples if s in geno_pos]
@@ -336,7 +365,8 @@ def main(argv=None) -> None:
     selected_path = os.path.join(args.outdir, f"{args.tissue}.expr_model_selected.tsv")
 
     wf = _open(weights_path, "wt")
-    wf.write("gene_id\tmethod\tconfig\tchannel\tvariant_id\tweight\n")
+    wf.write("gene_id\tmethod\tconfig\tchannel\tvariant_id\t"
+             "chromosome\tposition\tref\talt\tweight\n")
     seed = args.seed
     metrics: list[dict] = []
 
@@ -358,7 +388,9 @@ def main(argv=None) -> None:
         Xraw = np.column_stack(cols).astype(np.float64)[:, keep]
         sigma_g = float(np.std(Xraw @ w_raw))
         for i, w in zip(kept, w_raw):
-            wf.write(f"{gene}\t{args.method}\t{config}\t{channels[i]}\t{variants[i]}\t{w}\n")
+            al_chr, al_pos, al_ref, al_alt = alleles[variants[i]]
+            wf.write(f"{gene}\t{args.method}\t{config}\t{channels[i]}\t{variants[i]}\t"
+                     f"{al_chr}\t{al_pos}\t{al_ref}\t{al_alt}\t{w}\n")
         n_cis = sum(1 for i in kept if channels[i] == "cis")
         return dict(gene_id=gene, config=config, n_cis=n_cis, n_trans=len(kept) - n_cis,
                     loo_r2=r["loo_r2"], in_r2=r["in_r2"], elpd=r["elpd"], p_loo=r["p_loo"],
