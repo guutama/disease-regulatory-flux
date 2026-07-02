@@ -27,9 +27,9 @@ Outputs (written to <OUTDIR>):
 
 Run:  python analysis/figures/plot_alltargets_summary.py
 
-Input/output locations resolve under RESULTS -- by default the repo's own ``results_cv/``
-directory, overridable with the ``FLUX_RESULTS`` environment variable
-(e.g. ``FLUX_RESULTS=/path/to/results python analysis/figures/plot_alltargets_summary.py``).
+Input locations resolve under RESULTS -- by default the repo's own ``results_cv/`` directory,
+overridable with the ``FLUX_RESULTS`` environment variable. Figures are written to the shared
+figures directory (``results/figures/`` by default, overridable with ``FLUX_FIGURES``).
 All summaries are means (not medians); figures show a per-tissue breakdown with pooled totals
 kept to the funnel panel and the text. Style: Arial, 300 DPI, (a)(b) panel labels.
 """
@@ -49,13 +49,15 @@ plt.rcParams.update({
     "axes.spines.top": False, "axes.spines.right": False,
 })
 
-# Result files this figure reads/writes, resolved under RESULTS. The default is the repo's own
-# results_cv/ directory (relative to this script); override the root with the FLUX_RESULTS
-# environment variable, e.g. FLUX_RESULTS=/path/to/results python plot_alltargets_summary.py
+# Input result files resolve under RESULTS. The default is the repo's own results_cv/ directory
+# (relative to this script); override the root with the FLUX_RESULTS environment variable,
+# e.g. FLUX_RESULTS=/path/to/results python plot_alltargets_summary.py
 RESULTS = Path(os.environ.get("FLUX_RESULTS",
                               Path(__file__).resolve().parents[2] / "results_cv"))
 MODELS = RESULTS / "horseshoe_alltargets" / "models"
-OUTDIR = RESULTS / "horseshoe_alltargets" / "figures"
+# All figures are written to one shared directory: results/figures/ by default, overridable
+# with the FLUX_FIGURES environment variable.
+OUTDIR = Path(os.environ.get("FLUX_FIGURES", Path(__file__).resolve().parents[2] / "results" / "figures"))
 os.makedirs(OUTDIR, exist_ok=True)
 TISSUES = ["AOR", "Blood", "LIV", "MAM", "SF", "SKLM", "VAF"]
 TCOL = dict(zip(TISSUES, plt.cm.tab10(np.arange(len(TISSUES)))))
