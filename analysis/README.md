@@ -8,7 +8,7 @@ as run, with a module docstring saying what it makes, which inputs it reads, and
 analysis/
   figures/      one script per manuscript figure (main text and supplementary)
   tables/       builder for the release supplementary tables (S1-S9)
-  validation/   apply the published predictors to an external GWAS
+  validation/   apply the published predictors to an external GWAS or cohort
 ```
 
 ## Data availability
@@ -81,10 +81,12 @@ python analysis/tables/build_supp_tables.py \
 
 ## External validation
 
-`validation/twas_from_gwas.py` applies the published expression predictors (Supplementary Table
-S9) to any GWAS to obtain a per-gene, per-tissue summary-statistic TWAS, decomposed into cis and
-trans components, using only the released tables — no access to the individual-level STARNET data.
-Align the GWAS to the S9 ALT alleles first (with `bin/harmonise_gwas.py`), then:
+Both validators reuse the published predictor weights (Supplementary Table S9) with no retraining
+and no access to the individual-level STARNET data.
+
+**Summary-statistic TWAS on a new trait** — `validation/twas_from_gwas.py` applies the weights to
+any GWAS to obtain a per-gene, per-tissue TWAS statistic, decomposed into cis and trans
+components. Align the GWAS to the S9 ALT alleles first (with `bin/harmonise_gwas.py`), then:
 
 ```
 python analysis/validation/twas_from_gwas.py \
@@ -92,6 +94,21 @@ python analysis/validation/twas_from_gwas.py \
     --sigma-g   Supplementary_Table_S2_twas_association.csv \
     --gwas      <trait>.aligned.tsv.gz \
     --out       <trait>.external_twas.csv
+```
+
+**Predictor portability in a new cohort** — `validation/validate_predictors_external.py` tests our
+LOO-R2 (Supplementary Table S1) in an independent cohort with genotypes and measured expression
+from a matching tissue. It predicts expression from dosage (`yhat = sum_j weight_j * dosage_j`,
+cis and trans channels together) and reports the external squared correlation against the measured
+expression, next to our `loo_r2`. No model is refit.
+
+```
+python analysis/validation/validate_predictors_external.py \
+    --weights     Supplementary_Table_S9_predictor_weights.csv.gz \
+    --loo         Supplementary_Table_S1_expression_models.csv \
+    --dosage      <external dosage matrix.tsv.gz> \
+    --expression  <external expression matrix.tsv.gz> \
+    --tissue      AOR --out <cohort>.external_r2.csv --fig
 ```
 
 ## Shared helpers
