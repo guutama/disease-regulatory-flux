@@ -6,7 +6,9 @@ as run, with a module docstring saying what it makes, which inputs it reads, and
 
 ```
 analysis/
-  figures/   one script per manuscript figure (main text and supplementary)
+  figures/      one script per manuscript figure (main text and supplementary)
+  tables/       builder for the release supplementary tables (S1-S9)
+  validation/   apply the published predictors to an external GWAS
 ```
 
 ## Data availability
@@ -60,6 +62,37 @@ These reproduce the figures in `paper/flux_map_supplementary.tex`.
 | `figures/plot_grn_vs_classical_5methods.py` | `fig_grn_vs_classical_5methods` | five-method prediction comparison (three GRN priors vs two classical cis-only) |
 | `figures/compare_traingrn_leakage.py` | `fig_leakage_traingrn` | data-leakage control: full-cohort versus 80%-train re-run |
 | `figures/plot_flux_omnipath.py` | `fig_flux_omnipath_network` | OmniPath corroboration of the flux-map regulator→disease relations |
+
+## Supplementary tables
+
+`tables/build_supp_tables.py` assembles the release supplementary tables (S1-S9) from the
+per-tissue result files — expression-model summaries (S1), CAD association (S2), GRN edges (S3),
+flux edges (S4), flux node roles (S5), FinnGen replication (S6), cardiovascular gene-set
+membership (S7), functional enrichment (S8), and per-SNP predictor weights with dbSNP alleles and
+regulator provenance (S9) — plus a README data dictionary. Every table carries gene-, edge- and
+tissue-level summaries only. S9 (with alleles) is built when `--variant-map` is supplied.
+
+```
+GENE_ANNOT=/path/to/gencode.v19.genes.tsv \
+python analysis/tables/build_supp_tables.py \
+    --outdir supplementary_tables \
+    --variant-map <variant annotation TSV> --variant-map-id-col original_id
+```
+
+## External validation
+
+`validation/twas_from_gwas.py` applies the published expression predictors (Supplementary Table
+S9) to any GWAS to obtain a per-gene, per-tissue summary-statistic TWAS, decomposed into cis and
+trans components, using only the released tables — no access to the individual-level STARNET data.
+Align the GWAS to the S9 ALT alleles first (with `bin/harmonise_gwas.py`), then:
+
+```
+python analysis/validation/twas_from_gwas.py \
+    --weights   Supplementary_Table_S9_predictor_weights.csv.gz \
+    --sigma-g   Supplementary_Table_S2_twas_association.csv \
+    --gwas      <trait>.aligned.tsv.gz \
+    --out       <trait>.external_twas.csv
+```
 
 ## Shared helpers
 
