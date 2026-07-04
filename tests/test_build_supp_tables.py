@@ -8,8 +8,9 @@ streamed variant-map lookup) and load_weights (the per-tissue selection + annota
 import importlib.util
 from pathlib import Path
 
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas")
 
 _SPEC = importlib.util.spec_from_file_location(
     "build_supp_tables",

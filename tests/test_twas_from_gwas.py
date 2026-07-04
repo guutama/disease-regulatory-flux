@@ -8,8 +8,9 @@ import importlib.util
 import math
 from pathlib import Path
 
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas")
 
 _SPEC = importlib.util.spec_from_file_location(
     "twas_from_gwas",
