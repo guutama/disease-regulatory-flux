@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "Disease-regulatory flux map"
+abstract: >-
+  A data-agnostic Nextflow pipeline that decomposes each gene's disease
+  association into an own (cis) part and a network (trans) part, and attributes
+  the trans part to the specific upstream regulators that deliver it, using an
+  eQTL-instrumented causal gene regulatory network.
+type: software
+authors:
+  - given-names: "Gutama Ibrahim"
+    family-names: "Mohammad"
+    affiliation: "Computational Biology Unit, Department of Informatics, University of Bergen, Bergen, Norway"
+license: MIT
+repository-code: "https://github.com/guutama/disease-regulatory-flux"
+version: "1.0.0"
+date-released: "2026-07-04"
+keywords:
+  - transcriptome-wide association study
+  - gene regulatory network
+  - trans-eQTL
+  - causal inference
+  - Nextflow

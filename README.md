@@ -1,5 +1,7 @@
 # Disease-regulatory flux map
 
+[![DOI](https://zenodo.org/badge/1282993883.svg)](https://zenodo.org/badge/latestdoi/1282993883)
+
 A Nextflow pipeline that builds a **disease-regulatory flux map**: it splits each gene's
 disease association into an own (cis) part and a network (trans) part, and attributes the
 trans part to the specific upstream regulators that deliver it.
@@ -366,3 +368,41 @@ Per tissue and trait it writes, under `results/flux_map/`:
   disease-regulatory flux network.
 
 This step uses NumPy. Like Steps 8–9, it runs only when a GWAS samplesheet is given.
+
+---
+
+## Dependencies and third-party tools
+
+The pipeline calls a small set of established open-source tools as dependencies; none of their
+source is bundled in this repository, so each is fetched from its own distribution and remains
+under its own license. The exact versions are pinned in the repository's manifests, which are the
+authoritative record: `julia_project/Project.toml` and `julia_project/Manifest.toml` for Julia,
+and `requirements.txt` for Python.
+
+Pipeline runtime:
+
+- **Nextflow** (>= 24.04.2, Apache-2.0) — workflow orchestration.
+- **Julia** (1.11.3) with **BioFindr** (MIT) for the instrument-anchored causal GRN
+  reconstruction, plus CSV, DataFrames and Graphs.
+- **Python** (>= 3.9) with **NumPy**; the Bayesian expression-model step additionally uses
+  **NumPyro**, **JAX** and **ArviZ**.
+
+Analysis and figures (`analysis/`):
+
+- **pandas**, **matplotlib**, **SciPy**, **scikit-learn**, **statsmodels** and **NetworkX**;
+  the transcriptome-wide Manhattan panel optionally uses **R** with **ggplot2** and **ggrepel**.
+
+Please cite the tools that ask for it alongside this pipeline — in particular BioFindr
+(Wang & Michoel, *PLoS Comput. Biol.* 2017; *Bioinformatics* 2019) and Nextflow
+(Di Tommaso et al., *Nat. Biotechnol.* 2017).
+
+## License
+
+This project's own code is released under the MIT License (see [`LICENSE`](LICENSE)).
+Third-party dependencies are governed by their respective licenses, noted above.
+
+## Citation
+
+If you use this software, please cite it via the metadata in
+[`CITATION.cff`](CITATION.cff) (GitHub's "Cite this repository" button) and the archived
+release DOI shown by the badge at the top of this page.
