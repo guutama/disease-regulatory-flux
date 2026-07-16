@@ -375,9 +375,8 @@ This step uses NumPy. Like Steps 8–9, it runs only when a GWAS samplesheet is 
 
 The pipeline calls a small set of established open-source tools as dependencies; none of their
 source is bundled in this repository, so each is fetched from its own distribution and remains
-under its own license. The exact versions are pinned in the repository's manifests, which are the
-authoritative record: `julia_project/Project.toml` and `julia_project/Manifest.toml` for Julia,
-and `requirements.txt` for Python.
+under its own license. The exact versions are pinned in the repository's manifest, which is the
+authoritative record: `requirements.txt` for Python.
 
 Pipeline runtime:
 
@@ -385,8 +384,6 @@ Pipeline runtime:
 - **Python** (>= 3.9) with **NumPy**, **pandas** and **NetworkX**; the instrument-anchored
   causal GRN reconstruction uses **findr** (libfindr, AGPL-3.0) with **GSL**, and the
   Bayesian expression-model step additionally uses **NumPyro**, **JAX** and **ArviZ**.
-- **Julia** (1.11.3) with **BioFindr** (MIT), plus CSV, DataFrames and Graphs — optional,
-  used only by the BioFindr cross-check module (`modules/local/run_biofindr.nf`).
 
 Analysis and figures (`analysis/`):
 

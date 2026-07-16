@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
 Select one genetic instrument per regulator gene and write the three matrices the GRN
-reconstruction step (BioFindr) consumes for one tissue.
+reconstruction step (findr) consumes for one tissue.
 
 A gene can act as a regulator only if it has a cis-eQTL. To orient a regulator->target
-edge, BioFindr uses a single genetic instrument for the regulator: its strongest cis-eQTL
+edge, findr uses a single genetic instrument for the regulator: its strongest cis-eQTL
 (the "lead" SNP). This step reads one tissue's harmonised trio (the output of the
 harmonisation step) and produces:
 
   --out-de   the instrument list: one row per regulator gene, giving its lead cis-eQTL as
              a (variant_id, gene_id) pair. The variant comes first and the gene second, the
-             order BioFindr expects (the SNP is the instrument, the gene is the regulator).
+             order findr expects (the SNP is the instrument, the gene is the regulator).
 
   --out-dg   the genotype of those instruments, with samples as rows and one column per
-             instrument SNP (the dosage matrix BioFindr reads, transposed from the
+             instrument SNP (the dosage matrix findr reads, transposed from the
              variant-by-sample harmonised genotype).
 
   --out-dx   the expression of every gene, with samples as rows and one column per gene
@@ -34,7 +34,7 @@ Inputs are the harmonised tables (tab-separated by default, optionally gzipped):
 expression matrix has the gene id in its first column and one column per sample; the
 genotype matrix has the variant id in its first column and one column per sample; the eQTL
 table has columns for the gene id, the variant id, the effect size, its standard error and
-the p-value. The three output matrices are comma-separated, the format BioFindr reads.
+the p-value. The three output matrices are comma-separated, the format findr reads.
 
 Column names and the input delimiter are options, so a new dataset is supported by adjusting
 configuration rather than editing code.
@@ -62,7 +62,7 @@ def _split(line: str, delim: str) -> list[str]:
 
 
 def _hardcall(dosage: str) -> str:
-    """Round an allele dosage in [0, 2] to a 0/1/2 hard call. BioFindr's causal tests need
+    """Round an allele dosage in [0, 2] to a 0/1/2 hard call. findr's causal tests need
     the instrument genotype as integer categories, not continuous (imputed) dosages."""
     return str(min(2, max(0, int(float(dosage) + 0.5))))
 
@@ -107,7 +107,7 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="input: harmonised variant-by-sample dosage matrix")
     p.add_argument("--eqtl", required=True,
                    help="input: harmonised cis-eQTL table, one row per gene-variant pair")
-    # outputs (the BioFindr inputs)
+    # outputs (the findr inputs)
     p.add_argument("--out-dx", required=True,
                    help="output: expression matrix, samples x genes (comma-separated)")
     p.add_argument("--out-dg", required=True,
@@ -202,7 +202,7 @@ def main(argv=None) -> None:
     geno_pos = {s: i for i, s in enumerate(geno_samples)}
     order = [geno_pos[s] for s in expr_samples]          # reorder genotype to expression order
 
-    # ---- write the three BioFindr matrices (comma-separated) ---------------------------
+    # ---- write the three findr matrices (comma-separated) ---------------------------
     with _open(args.out_dx, "wt") as fout:
         fout.write(",".join(genes) + "\n")
         for s in range(len(expr_samples)):

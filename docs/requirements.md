@@ -14,15 +14,14 @@ or in a container — is up to you.
 | NumPy    | ≥ 1.21 | LD-filtering and expression-model steps |
 | NumPyro + JAX | NumPyro ≥ 0.13 | MCMC fitting of the expression models |
 | ArviZ    | 0.17 (with SciPy < 1.13), or a build matching your SciPy | PSIS leave-one-out scoring of the expression models |
-| Julia    | 1.11.3 | runs the GRN reconstruction step (BioFindr) |
-| BioFindr (+ CSV, DataFrames, Graphs) | pinned in `julia_project/` | causal network inference |
+| findr (libfindr) + GSL | libfindr.so (`findr_libpath`); GSL on the library path (`findr_gsl_dir`) | causal network inference |
 
 ArviZ 0.17 imports `scipy.signal.gaussian`, which moved to `scipy.signal.windows` in SciPy
 1.13; install ArviZ against SciPy < 1.13 (or a newer ArviZ matched to your SciPy) so it loads.
 
-The Julia packages are pinned in `julia_project/` (`Project.toml` / `Manifest.toml`) and
-installed once with `julia_project/install_biofindr.jl`. Julia 1.11.3 is required: earlier
-1.10.x releases fail to load the pinned BioFindr dependency tree.
+The GRN reconstruction calls Lingfei Wang's libfindr C core through the python `findr`
+package; point `findr_libpath` at `libfindr.so` and `findr_gsl_dir` at the GSL library
+directory it links against.
 
 ## For development
 
@@ -36,7 +35,7 @@ installed once with `julia_project/install_biofindr.jl`. Julia 1.11.3 is require
 |------|--------------|
 | 1. harmonise inputs (`bin/harmonise_inputs.py`) | Python ≥ 3.9, standard library only |
 | 2. select instruments (`bin/select_instruments.py`) | Python ≥ 3.9, standard library only |
-| 3. reconstruct GRN (`bin/reconstruct_grn.jl`) | Julia 1.11.3 + BioFindr (pinned in `julia_project/`) |
+| 3. reconstruct GRN (`bin/run_findr_py.py`) | Python ≥ 3.9 + findr (libfindr) + GSL |
 | 4. select cis features (`bin/select_cis_features.py`) | Python ≥ 3.9, standard library only |
 | 5. LD-prune (`bin/ld_prune.py`) | Python ≥ 3.9 + NumPy |
 | 6. trans features (`bin/trans_features.py`) | Python ≥ 3.9, standard library only |

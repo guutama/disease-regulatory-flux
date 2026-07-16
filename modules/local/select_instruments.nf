@@ -5,7 +5,7 @@
  * Takes the tissue's harmonised trio (the output of Step 1) and, for every gene with a
  * cis-eQTL, picks its lead SNP (smallest p-value; ties broken by largest effect size then
  * variant id) as the instrument. It then writes the three matrices the GRN reconstruction
- * step (BioFindr) reads: the instrument list (dE), the instruments' genotype (dG, samples x
+ * step (findr) reads: the instrument list (dE), the instruments' genotype (dG, samples x
  * SNPs) and the expression of all genes (dX, samples x genes), with dX and dG sharing one
  * sample order. See bin/select_instruments.py for the contract.
  *

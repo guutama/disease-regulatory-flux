@@ -45,9 +45,6 @@ work/
 .nextflow.log*
 .conda_envs/
 .conda_pkgs/
-julia_project/*
-!julia_project/Project.toml
-!julia_project/Manifest.toml
 lib/
 logs/
 test/fixtures/

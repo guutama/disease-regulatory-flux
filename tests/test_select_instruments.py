@@ -1,4 +1,4 @@
-"""Unit tests for bin/select_instruments.py (instrument selection / BioFindr inputs).
+"""Unit tests for bin/select_instruments.py (instrument selection / findr inputs).
 
 A small simulated trio is generated in tmp_path. We test:
   * lead-SNP selection and the deterministic tie-break (min p -> largest |beta| -> variant),
@@ -114,7 +114,7 @@ def test_dg_instruments_only_transposed_and_reordered(tmp_path):
 
 
 def test_dg_hardcalls_dosages(tmp_path):
-    # imputed dosages must be rounded to 0/1/2: BioFindr's causal tests need integer genotypes
+    # imputed dosages must be rounded to 0/1/2: findr's causal tests need integer genotypes
     expr = [["gene_id", "S1", "S2", "S3"], ["geneA", 0.1, 0.2, 0.3], ["geneB", 1.0, 2.0, 3.0]]
     geno = [["variant_id", "chromosome", "position", "ref", "alt", "S1", "S2", "S3"],
             ["rs1", "1", "100", "A", "G", 0.4, 1.6, 2.0]]      # -> 0, 2, 2

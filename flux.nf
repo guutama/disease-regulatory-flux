@@ -7,7 +7,7 @@
  *   Step 2  SELECT_INSTRUMENTS  -- pick each regulator's lead cis-eQTL and build the
  *                                 GRN reconstruction inputs (dX, dG, dE) per tissue.
  *   Step 3  RECONSTRUCT_GRN     -- infer the directed gene regulatory network per tissue
- *                                 with BioFindr.
+ *                                 with findr.
  *   Step 4  SELECT_CIS_FEATURES -- build each gene's cis-eQTL SNP set (the cis channel)
  *                                 per tissue.
  *   Step 5  LD_PRUNE            -- LD-prune each gene's cis SNPs and emit a 0/1/2 hard-call
