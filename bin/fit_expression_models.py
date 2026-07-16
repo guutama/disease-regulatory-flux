@@ -47,6 +47,7 @@ are options, so a new dataset is supported by adjusting configuration rather tha
 from __future__ import annotations
 
 import argparse
+import gc
 import gzip
 import os
 import sys
@@ -68,6 +69,20 @@ except Exception:
 
 PRED_THRESHOLD = 0.01
 _MODEL_CACHE: dict = {}
+
+# Column layout of the per-gene metrics table (shared by the full run and the per-chunk shards,
+# and re-used by the aggregation helper so a shard and a whole-tissue file are the same format).
+SHORT = {"cis_only": "cis", "trans_only": "trans", "cis_trans": "cistrans"}
+METRIC_COLS = (["gene_id", "gene_class", "n_cis", "n_trans"]
+               + [f"loo_r2_{c}" for c in SHORT.values()]
+               + [f"elpd_{c}" for c in SHORT.values()]
+               + ["best_config", "best_loo_r2", "best_elpd", "best_sigma_g",
+                  "best_intercept", "predictable"])
+
+# Each configuration gets a fixed slot so a gene's MCMC seed depends only on the gene's position
+# in the FULL sorted gene list (not on the loop / chunking), giving identical results whole or
+# chunked. See fit_config().
+CONFIG_SLOT = {"cis_only": 0, "trans_only": 1, "cis_trans": 2}
 
 
 # ----------------------------------------------------------------------------- io helpers
@@ -111,20 +126,20 @@ def load_gene_variants(path: str, delim: str, gene_col: str, variant_col: str):
 
 
 def load_expression(path: str, delim: str, gene_col: str, genes: set[str]):
-    """Return (samples, gene_id -> expression vector) for the requested genes."""
+    """Return (samples, gene_id -> expression vector) for the requested genes. The gene-id column
+    is located by name, so any leading annotation columns (e.g. a gene_symbol before gene_id) are
+    skipped and every column after the gene-id column is treated as a sample."""
     expr: dict[str, np.ndarray] = {}
     with _open(path) as fh:
         header = _split(fh.readline(), delim)
-        if header[0] != gene_col:
-            raise SystemExit(f"The first column of the expression matrix must be "
-                             f"'{gene_col}', but it is '{header[0]}'.")
-        samples = header[1:]
+        gi = _col(header, gene_col, "expression")
+        samples = header[gi + 1:]
         for line in fh:
             f = _split(line, delim)
             if not f or f == [""]:
                 continue
-            if f[0] in genes:
-                expr[f[0]] = np.array(f[1:], dtype=np.float64)
+            if f[gi] in genes:
+                expr[f[gi]] = np.array(f[gi + 1:], dtype=np.float64)
     return samples, expr
 
 
@@ -175,6 +190,19 @@ def _build_models():
     likelihood y ~ Normal(X beta, sigma)."""
     if _MODEL_CACHE:
         return _MODEL_CACHE
+    import jax
+    # Persistent on-disk XLA compilation cache (as in bin/horseshoe_alltargets_fit.py): after each
+    # gene we clear the in-memory cache to bound RSS, so recompiling a repeated genotype shape is
+    # served cheaply from disk. Enabled when $JAX_CACHE is set (the SLURM job sets a node-local dir).
+    _cache = os.environ.get("JAX_CACHE")
+    if _cache:
+        try:
+            os.makedirs(_cache, exist_ok=True)
+            jax.config.update("jax_compilation_cache_dir", _cache)
+            jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+            jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+        except Exception:
+            pass
     import jax.numpy as jnp
     import numpyro
     import numpyro.distributions as dist
@@ -266,6 +294,18 @@ def fit(method: str, Xstd: np.ndarray, channel: np.ndarray, n_ch: int, yc: np.nd
                 p_loo=float(loo.p_loo), khat=khat)
 
 
+def _free_jax_memory():
+    """Release the accumulated JAX compilation cache and reap arviz/numpyro reference cycles.
+    Called once per gene: without it the compiled-executable cache grows with every distinct
+    genotype shape across a chunk and the job's RSS climbs until it OOMs."""
+    try:
+        import jax
+        jax.clear_caches()
+    except Exception:
+        pass
+    gc.collect()
+
+
 def standardise(cols: list[np.ndarray]):
     """Stack genotype columns, drop constant ones, return (Xstd, mean, sd, keep_mask)."""
     M = np.column_stack(cols).astype(np.float64)
@@ -309,7 +349,19 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--delimiter", default="\t", help="delimiter of the tab inputs (default: tab)")
     p.add_argument("--gene-col", default="gene_id", help="gene-id column (default: gene_id)")
     p.add_argument("--variant-col", default="variant_id",
-                   help="variant-id column (default: variant_id)")
+                   help="variant-id column in the genotype and trans-features files "
+                        "(default: variant_id)")
+    p.add_argument("--cis-variant-col", default=None,
+                   help="variant-id column in the cis-pruned file when it differs from "
+                        "--variant-col (default: same as --variant-col). The STARNET cis-pruned "
+                        "files name it 'rs_id' while the genotype/trans files use 'variant_id'.")
+    p.add_argument("--chunk-id", type=int, default=0,
+                   help="0-based index of this chunk when sharding a tissue (default: 0)")
+    p.add_argument("--n-chunks", type=int, default=1,
+                   help="number of chunks the candidate genes are split into; 1 (default) fits "
+                        "the whole tissue and writes the canonical outputs, >1 fits the strided "
+                        "gene subset genes[chunk_id::n_chunks] and writes per-chunk metrics/weights "
+                        "shards for later aggregation")
     p.add_argument("--variant-map", default=None,
                    help="optional variant_id -> chromosome/position/ref/alt mapping; when given, "
                         "the written weights take alleles from it instead of the genotype's own "
@@ -332,13 +384,26 @@ def main(argv=None) -> None:
     args = parse_args(argv)
     d = args.delimiter
 
-    cis_map = load_gene_variants(args.cis_pruned, d, args.gene_col, args.variant_col)
+    if args.n_chunks < 1:
+        raise SystemExit("--n-chunks must be >= 1.")
+    if not (0 <= args.chunk_id < args.n_chunks):
+        raise SystemExit(f"--chunk-id must be in [0, {args.n_chunks}).")
+    cis_variant_col = args.cis_variant_col or args.variant_col
+
+    cis_map = load_gene_variants(args.cis_pruned, d, args.gene_col, cis_variant_col)
     trans_map = load_gene_variants(args.trans_features, d, args.gene_col, args.variant_col)
     cis_cand = {g for g, v in cis_map.items() if len(v) >= args.min_cis}
     trans_cand = {g for g, v in trans_map.items() if len(v) >= 1}
     genes = sorted(cis_cand | trans_cand)
     if not genes:
         raise SystemExit("No gene has a cis or trans channel, so nothing can be fit.")
+
+    # A gene's seed keys off its index in the FULL sorted list (built before any striding), so the
+    # same gene draws the same seed whether the tissue is fit whole or in chunks.
+    gene_index = {g: i for i, g in enumerate(genes)}
+    sharded = args.n_chunks > 1
+    if sharded:
+        genes = genes[args.chunk_id::args.n_chunks]   # strided -> balanced chunks
 
     universe: set[str] = set()
     for g in genes:
@@ -360,19 +425,23 @@ def main(argv=None) -> None:
     g_idx = np.array([geno_pos[s] for s in common])
 
     os.makedirs(args.outdir, exist_ok=True)
-    weights_path = os.path.join(args.outdir, f"{args.tissue}.expr_model_weights.tsv.gz")
-    metrics_path = os.path.join(args.outdir, f"{args.tissue}.expr_model_metrics.tsv.gz")
-    selected_path = os.path.join(args.outdir, f"{args.tissue}.expr_model_selected.tsv")
+    if sharded:                                # per-gene shards; tissue-level files come from aggregation
+        cid = args.chunk_id
+        weights_path = os.path.join(args.outdir, f"{args.tissue}.expr_model_weights.chunk{cid}.tsv.gz")
+        metrics_path = os.path.join(args.outdir, f"{args.tissue}.expr_model_metrics.chunk{cid}.tsv.gz")
+        selected_path = None
+    else:
+        weights_path = os.path.join(args.outdir, f"{args.tissue}.expr_model_weights.tsv.gz")
+        metrics_path = os.path.join(args.outdir, f"{args.tissue}.expr_model_metrics.tsv.gz")
+        selected_path = os.path.join(args.outdir, f"{args.tissue}.expr_model_selected.tsv")
 
     wf = _open(weights_path, "wt")
     wf.write("gene_id\tmethod\tconfig\tchannel\tvariant_id\t"
              "chromosome\tposition\tref\talt\tweight\n")
-    seed = args.seed
     metrics: list[dict] = []
 
-    def fit_config(gene: str, config: str, variants: list[str], channels: list[str],
+    def fit_config(gene: str, gidx: int, config: str, variants: list[str], channels: list[str],
                    yc: np.ndarray, ymu: float, n_ch: int):
-        nonlocal seed
         cols = [geno[v][g_idx] for v in variants]
         Xstd, mu, sd, keep = standardise(cols)
         if Xstd.shape[1] == 0:
@@ -380,7 +449,8 @@ def main(argv=None) -> None:
         kept = [i for i, k in enumerate(keep) if k]
         # cis -> channel 0; trans -> channel n_ch-1 (so a single-channel config uses channel 0)
         ch = np.array([0 if channels[i] == "cis" else n_ch - 1 for i in kept])
-        seed += 1
+        # deterministic per (base seed, gene position in full list, config) -> chunk-invariant
+        seed = args.seed + gidx * len(CONFIG_SLOT) + CONFIG_SLOT[config]
         r = fit(args.method, Xstd, ch, n_ch, yc, seed=seed,
                 warmup=args.mcmc_warmup, samples=args.mcmc_samples)
         w_raw = r["beta_std"] / sd
@@ -399,6 +469,7 @@ def main(argv=None) -> None:
     for gene in genes:
         if gene not in expr:
             continue
+        gidx = gene_index[gene]
         y = expr[gene][e_idx]
         ymu = float(y.mean())
         yc = y - ymu
@@ -411,40 +482,41 @@ def main(argv=None) -> None:
         has_cis = len(cis_v) >= args.min_cis
 
         if has_cis:
-            m = fit_config(gene, "cis_only", cis_v, ["cis"] * len(cis_v), yc, ymu, 1)
+            m = fit_config(gene, gidx, "cis_only", cis_v, ["cis"] * len(cis_v), yc, ymu, 1)
             if m:
                 metrics.append(m)
             if trans_v:
-                m = fit_config(gene, "trans_only", trans_v, ["trans"] * len(trans_v), yc, ymu, 1)
+                m = fit_config(gene, gidx, "trans_only", trans_v, ["trans"] * len(trans_v), yc, ymu, 1)
                 if m:
                     metrics.append(m)
                 allv = cis_v + trans_v
                 ch = ["cis"] * len(cis_v) + ["trans"] * len(trans_v)
-                m = fit_config(gene, "cis_trans", allv, ch, yc, ymu, 2)
+                m = fit_config(gene, gidx, "cis_trans", allv, ch, yc, ymu, 2)
                 if m:
                     metrics.append(m)
         elif trans_v:
-            m = fit_config(gene, "trans_only", trans_v, ["trans"] * len(trans_v), yc, ymu, 1)
+            m = fit_config(gene, gidx, "trans_only", trans_v, ["trans"] * len(trans_v), yc, ymu, 1)
             if m:
                 metrics.append(m)
+        _free_jax_memory()   # bound RSS: drop this gene's compiled executables before the next
     wf.close()
 
-    write_outputs(metrics, args, metrics_path, selected_path)
+    if sharded:
+        write_metrics_file(build_rows(metrics, args.pred_threshold), metrics_path)
+        sys.stderr.write(f"[fit_expression_models] tissue={args.tissue} method={args.method} "
+                         f"chunk={args.chunk_id}/{args.n_chunks} genes_in_chunk={len(genes)} "
+                         f"fit_rows={len(metrics)} -> shard {os.path.basename(metrics_path)}\n")
+    else:
+        write_outputs(metrics, args, metrics_path, selected_path)
 
 
-def write_outputs(metrics: list[dict], args, metrics_path: str, selected_path: str):
-    """Pivot the per-gene-config rows to one row per gene, select the best config by elpd,
-    flag predictable genes, and write the metrics, selected and stats files."""
+def build_rows(metrics: list[dict], pred_threshold: float = PRED_THRESHOLD) -> list[dict]:
+    """Pivot the per-gene-config fit records to one row per gene: pick the best config by elpd
+    and flag predictable genes. Selection is per gene, so a gene's row is final regardless of
+    which chunk fit it. Returns rows sorted by gene_id."""
     by_gene: dict[str, dict[str, dict]] = defaultdict(dict)
     for m in metrics:
         by_gene[m["gene_id"]][m["config"]] = m
-    short = {"cis_only": "cis", "trans_only": "trans", "cis_trans": "cistrans"}
-
-    metric_cols = (["gene_id", "gene_class", "n_cis", "n_trans"]
-                   + [f"loo_r2_{c}" for c in short.values()]
-                   + [f"elpd_{c}" for c in short.values()]
-                   + ["best_config", "best_loo_r2", "best_elpd", "best_sigma_g",
-                      "best_intercept", "predictable"])
     rows = []
     for gene in sorted(by_gene):
         cfgs = by_gene[gene]
@@ -452,7 +524,7 @@ def write_outputs(metrics: list[dict], args, metrics_path: str, selected_path: s
         n_trans = max((m["n_trans"] for m in cfgs.values()), default=0)
         row = {"gene_id": gene, "gene_class": gene_class(n_cis, n_trans),
                "n_cis": n_cis, "n_trans": n_trans}
-        for cfg, s in short.items():
+        for cfg, s in SHORT.items():
             row[f"loo_r2_{s}"] = cfgs[cfg]["loo_r2"] if cfg in cfgs else ""
             row[f"elpd_{s}"] = cfgs[cfg]["elpd"] if cfg in cfgs else ""
         best = max(cfgs.values(), key=lambda m: m["elpd"])
@@ -461,14 +533,19 @@ def write_outputs(metrics: list[dict], args, metrics_path: str, selected_path: s
         row["best_elpd"] = best["elpd"]
         row["best_sigma_g"] = best["sigma_g"]
         row["best_intercept"] = best["intercept"]
-        row["predictable"] = best["loo_r2"] >= args.pred_threshold
+        row["predictable"] = best["loo_r2"] >= pred_threshold
         rows.append(row)
+    return rows
 
+
+def write_metrics_file(rows: list[dict], metrics_path: str):
     with _open(metrics_path, "wt") as fh:
-        fh.write("\t".join(metric_cols) + "\n")
+        fh.write("\t".join(METRIC_COLS) + "\n")
         for row in rows:
-            fh.write("\t".join(str(row[c]) for c in metric_cols) + "\n")
+            fh.write("\t".join(str(row[c]) for c in METRIC_COLS) + "\n")
 
+
+def write_selected(rows: list[dict], selected_path: str):
     with _open(selected_path, "wt") as fh:
         fh.write("gene_id\tgene_class\tbest_config\tbest_loo_r2\tbest_sigma_g\t"
                  "best_intercept\tn_cis\tn_trans\n")
@@ -478,6 +555,13 @@ def write_outputs(metrics: list[dict], args, metrics_path: str, selected_path: s
                          f"{row['best_loo_r2']}\t{row['best_sigma_g']}\t{row['best_intercept']}\t"
                          f"{row['n_cis']}\t{row['n_trans']}\n")
 
+
+def write_outputs(metrics: list[dict], args, metrics_path: str, selected_path: str):
+    """Pivot the per-gene-config rows to one row per gene, select the best config by elpd,
+    flag predictable genes, and write the metrics, selected and stats files."""
+    rows = build_rows(metrics, args.pred_threshold)
+    write_metrics_file(rows, metrics_path)
+    write_selected(rows, selected_path)
     write_stats(rows, args)
 
 
