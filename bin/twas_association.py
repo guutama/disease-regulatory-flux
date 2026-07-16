@@ -53,9 +53,15 @@ Inputs
   --tissue     --trait     labels written into the outputs
   --outdir
 
+A trans-channel significance floor (--trans-sigma-floor) reflects that a trans predictor with
+a small sigma_g inflates |z_trans| off the small denominator: a gene whose winning predictor
+uses the trans channel (n_trans > 0) and whose sigma_g is at or below the floor is not called
+significant (its p_adj is forced to 1 and trans_ok is False), because the trans association is
+not trusted below the floor. The raw two-sided p_value is left untouched.
+
 Output: <outdir>/association_<tissue>_<trait>.tsv, one row per gene
   gene_id  config  n_snp  n_cis  n_trans  n_gwas  z_twas  z_cis  z_trans
-  sigma_g  max_amp  cancel  unstable  p_value  p_adj  tissue  trait
+  sigma_g  max_amp  cancel  unstable  p_value  p_adj  trans_ok  tissue  trait
 """
 from __future__ import annotations
 
@@ -195,6 +201,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--sigma-g-floor", type=float, default=0.0,
                    help="drop genes whose predictor SD sigma_g is below this absolute floor "
                         "(degenerate-denominator guard; default: 0 = only drop sigma_g == 0)")
+    p.add_argument("--trans-sigma-floor", type=float, default=0.0,
+                   help="a trans-using gene (n_trans > 0) with sigma_g <= this is not called "
+                        "significant (p_adj forced to 1, trans_ok=False); distrusts the trans "
+                        "channel below the floor (default: 0 = off)")
     p.add_argument("--delimiter", default="\t", help="field delimiter (default: tab)")
     p.add_argument("--gene-col", default="gene_id", help="gene-id column (default: gene_id)")
     p.add_argument("--variant-col", default="variant_id",
@@ -261,12 +271,18 @@ def main(argv=None) -> None:
                             unstable=unstable, p_value=p_value))
 
     p_adj = bh_fdr([r["p_value"] for r in records])
+    # trans-channel significance floor: a distrusted small-sigma_g trans predictor is excluded
+    # from the significant set (p_adj -> 1); trans_ok records whether the gene passed the rule.
+    for i, r in enumerate(records):
+        r["trans_ok"] = not (r["n_trans"] > 0 and r["sigma_g"] <= args.trans_sigma_floor)
+        if not r["trans_ok"]:
+            p_adj[i] = 1.0
 
     os.makedirs(args.outdir, exist_ok=True)
     out = os.path.join(args.outdir, f"association_{args.tissue}_{args.trait}.tsv")
     cols = ["gene_id", "config", "n_snp", "n_cis", "n_trans", "n_gwas",
             "z_twas", "z_cis", "z_trans", "sigma_g", "max_amp", "cancel", "unstable",
-            "p_value", "p_adj", "tissue", "trait"]
+            "p_value", "p_adj", "trans_ok", "tissue", "trait"]
     with open(out, "wt") as fh:
         fh.write("\t".join(cols) + "\n")
         for r, padj in zip(records, p_adj):
@@ -277,9 +293,10 @@ def main(argv=None) -> None:
 
     n_sig = int((p_adj < 0.05).sum())
     n_unstable = sum(r["unstable"] for r in records)
+    n_trans_floored = sum(1 for r in records if not r["trans_ok"])
     print(f"[twas_association] tissue={args.tissue} trait={args.trait} "
           f"tested={len(records)} sig(FDR<0.05)={n_sig} unstable={n_unstable} "
-          f"dropped_low_sigma={n_degenerate}")
+          f"dropped_low_sigma={n_degenerate} trans_floored={n_trans_floored}")
 
 
 if __name__ == "__main__":
