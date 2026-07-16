@@ -12,6 +12,38 @@ expression over the genotypes (the LD/variance term -- no external panel needed)
 the numerator to one channel gives the cis and trans components, which sum to z_TWAS. The
 two-sided p-value is from the standard normal; a Benjamini-Hochberg FDR is applied per tissue.
 
+Predictor-stability diagnostics accompany every gene, because a small or degenerate predictor
+can inflate |z_TWAS| off null SNPs. Two dimensionless quantities are reported:
+
+    max_amp = max_j |w_j sd_j| / sigma_g       single-SNP leverage ("explosion")
+    cancel  = sqrt( sum_j (w_j sd_j)^2 ) / sigma_g   weight cancellation ("instability")
+
+max_amp is how much a single SNP's dosage-scaled weight exceeds the whole predictor's SD, so
+that SNP alone drives z ~ max_amp * z_gwas_j when sigma_g is too small next to it. cancel is how
+much smaller the realised sigma_g is than the independent-SNP scale, i.e. how much the SNPs
+cancel in G w and shrink the denominator. A gene is flagged unstable when max_amp >= --amp-thr
+or cancel >= --cancel-thr (both default 3; a single-SNP predictor has max_amp = cancel = 1 by
+construction). Separately, genes whose predictor SD falls below --sigma-g-floor (an absolute
+guard against a degenerate denominator) are dropped before FDR, alongside the sigma_g == 0 case.
+
+What cancel really is, and what it does NOT claim. Writing r_j = w_j sd_j for the scaled
+weights and R for the SNP LD correlation matrix, sigma_g^2 = r' R r and sum_j (w_j sd_j)^2 = r'r,
+so cancel^2 = (r'r) / (r' R r) = 1 / Rayleigh(R, r): cancel is the reciprocal Rayleigh quotient
+of the LD matrix along the weight direction -- a per-gene condition number of the burden
+denominator w'Sigma w (the same quadratic form FUSION-style TWAS puts under the square root).
+Because tr(R) = n, cancel < 1 means r lies along high-eigenvalue (correlated, reinforcing)
+directions and cancel > 1 along low-eigenvalue (near-collinear, cancelling) ones, bounded by
+cancel^2 <= 1/lambda_min(R). Crucially, cancel is a conditioning/sensitivity flag, not evidence
+of a false positive: under the exactly-specified null z_gwas ~ N(0, R), z_TWAS = r'z / sigma_g
+has variance 1 for ANY cancel -- sigma_g is the correct normalization. cancel is precisely the
+factor by which any mismatch between the LD in sigma_g and the true joint law of the GWAS z's is
+amplified. Here sigma_g uses the in-sample genotypes the predictor was fit on, so there is no
+reference-panel mismatch on the denominator; the only exposure of a high-cancel gene is between
+that in-sample LD and the external GWAS cohort's LD (plus pleiotropy / real multi-SNP effects).
+That is why max_amp/cancel/unstable are reported as columns rather than row-dropped: the hard
+filter that removes flagged genes from downstream results is a conservative robustness policy
+(we cannot certify per-gene in-sample-vs-GWAS LD agreement), not a verdict of spuriousness.
+
 Inputs
   --weights    <tissue>.expr_model_weights.tsv.gz (gene_id, method, config, channel,
                variant_id, weight) -- one block per predictable gene
@@ -23,7 +55,7 @@ Inputs
 
 Output: <outdir>/association_<tissue>_<trait>.tsv, one row per gene
   gene_id  config  n_snp  n_cis  n_trans  n_gwas  z_twas  z_cis  z_trans
-  sigma_g  p_value  p_adj  tissue  trait
+  sigma_g  max_amp  cancel  unstable  p_value  p_adj  tissue  trait
 """
 from __future__ import annotations
 
@@ -156,6 +188,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--tissue", required=True, help="tissue label")
     p.add_argument("--trait", required=True, help="trait label")
     p.add_argument("--outdir", required=True, help="output directory")
+    p.add_argument("--amp-thr", type=float, default=3.0,
+                   help="unstable if max_amp = max_j |w_j sd_j|/sigma_g >= this (default: 3)")
+    p.add_argument("--cancel-thr", type=float, default=3.0,
+                   help="unstable if cancel = sqrt(sum_j (w_j sd_j)^2)/sigma_g >= this (default: 3)")
+    p.add_argument("--sigma-g-floor", type=float, default=0.0,
+                   help="drop genes whose predictor SD sigma_g is below this absolute floor "
+                        "(degenerate-denominator guard; default: 0 = only drop sigma_g == 0)")
     p.add_argument("--delimiter", default="\t", help="field delimiter (default: tab)")
     p.add_argument("--gene-col", default="gene_id", help="gene-id column (default: gene_id)")
     p.add_argument("--variant-col", default="variant_id",
@@ -178,6 +217,7 @@ def main(argv=None) -> None:
     gwas_z = load_gwas_z(args.gwas, d, args.variant_col)
 
     records = []
+    n_degenerate = 0
     for gene, rows in genes.items():
         snps = [(ch, v, w) for ch, v, w in rows if v in geno]
         if not snps:
@@ -186,8 +226,14 @@ def main(argv=None) -> None:
         for _, v, w in snps:
             pred = pred + w * geno[v]
         sigma_g = float(pred.std())
-        if sigma_g == 0.0:
+        if sigma_g == 0.0 or sigma_g < args.sigma_g_floor:
+            n_degenerate += 1          # degenerate denominator -> drop before FDR
             continue
+        # predictor-stability diagnostics (GWAS-independent properties of the weights)
+        wsd = np.array([w * sd[v] for _, v, w in snps])
+        max_amp = float(np.max(np.abs(wsd)) / sigma_g)
+        cancel = float(np.sqrt(np.sum(wsd ** 2)) / sigma_g)
+        unstable = (max_amp >= args.amp_thr) or (cancel >= args.cancel_thr)
         num_cis = num_trans = 0.0
         n_cis = n_trans = n_gwas = 0
         for ch, v, w in snps:
@@ -211,14 +257,16 @@ def main(argv=None) -> None:
         records.append(dict(gene_id=gene, config=selected[gene], n_snp=len(snps),
                             n_cis=n_cis, n_trans=n_trans, n_gwas=n_gwas,
                             z_twas=z_twas, z_cis=z_cis, z_trans=z_trans,
-                            sigma_g=sigma_g, p_value=p_value))
+                            sigma_g=sigma_g, max_amp=max_amp, cancel=cancel,
+                            unstable=unstable, p_value=p_value))
 
     p_adj = bh_fdr([r["p_value"] for r in records])
 
     os.makedirs(args.outdir, exist_ok=True)
     out = os.path.join(args.outdir, f"association_{args.tissue}_{args.trait}.tsv")
     cols = ["gene_id", "config", "n_snp", "n_cis", "n_trans", "n_gwas",
-            "z_twas", "z_cis", "z_trans", "sigma_g", "p_value", "p_adj", "tissue", "trait"]
+            "z_twas", "z_cis", "z_trans", "sigma_g", "max_amp", "cancel", "unstable",
+            "p_value", "p_adj", "tissue", "trait"]
     with open(out, "wt") as fh:
         fh.write("\t".join(cols) + "\n")
         for r, padj in zip(records, p_adj):
@@ -228,8 +276,10 @@ def main(argv=None) -> None:
                 f"{r[c]:.10g}" if isinstance(r[c], float) else str(r[c]) for c in cols) + "\n")
 
     n_sig = int((p_adj < 0.05).sum())
+    n_unstable = sum(r["unstable"] for r in records)
     print(f"[twas_association] tissue={args.tissue} trait={args.trait} "
-          f"tested={len(records)} sig(FDR<0.05)={n_sig}")
+          f"tested={len(records)} sig(FDR<0.05)={n_sig} unstable={n_unstable} "
+          f"dropped_low_sigma={n_degenerate}")
 
 
 if __name__ == "__main__":
