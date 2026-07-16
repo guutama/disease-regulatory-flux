@@ -163,10 +163,10 @@ under `results/grn_inputs/`.
 ## Third step: GRN reconstruction
 
 The third stage reconstructs each tissue's gene regulatory network from the `dX`/`dG`/`dE`
-inputs using [BioFindr](https://github.com/tmichoel/BioFindr) (`bin/reconstruct_grn.jl`). It
-runs the canonical three-function pipeline---`findr` (pairwise causal posteriors, each edge
-oriented by the regulator's instrument), `globalfdr!` (keep edges at the chosen
-false-discovery rate) and `dagfindr!` (greedy cycle removal)---to produce a directed acyclic
+inputs using [findr](https://github.com/lingfeiwang/findr) (`bin/run_findr_py.py`), the
+python package around Lingfei Wang's libfindr C core. It runs the canonical three-step
+pipeline---pairwise causal posteriors (each edge oriented by the regulator's instrument), a
+global false-discovery q-value cut, and greedy cycle removal---to produce a directed acyclic
 network in which every gene is a candidate target and every edge starts from an
 instrument-anchored regulator. Per tissue it writes:
 
@@ -176,9 +176,9 @@ instrument-anchored regulator. Per tissue it writes:
   so a network at a different FDR can be derived without recomputing the posteriors;
 - `<tissue>.grn_qc.tsv` — node, edge, regulator, target and degree counts;
 
-under `results/grn/`. This step uses Julia and BioFindr (pinned in `julia_project/`); the
-test combination, FDR and mixture-fit method are set by `grn_combination`, `grn_fdr` and
-`grn_findr_method` in `nextflow.config`.
+under `results/grn/`. The libfindr shared library and its GSL dependency are located via
+`findr_libpath` and `findr_gsl_dir`; the test combination and FDR are set by
+`grn_combination` and `grn_fdr` in `nextflow.config`.
 
 ---
 
@@ -382,17 +382,18 @@ and `requirements.txt` for Python.
 Pipeline runtime:
 
 - **Nextflow** (>= 24.04.2, Apache-2.0) — workflow orchestration.
-- **Julia** (1.11.3) with **BioFindr** (MIT) for the instrument-anchored causal GRN
-  reconstruction, plus CSV, DataFrames and Graphs.
-- **Python** (>= 3.9) with **NumPy**; the Bayesian expression-model step additionally uses
-  **NumPyro**, **JAX** and **ArviZ**.
+- **Python** (>= 3.9) with **NumPy**, **pandas** and **NetworkX**; the instrument-anchored
+  causal GRN reconstruction uses **findr** (libfindr, AGPL-3.0) with **GSL**, and the
+  Bayesian expression-model step additionally uses **NumPyro**, **JAX** and **ArviZ**.
+- **Julia** (1.11.3) with **BioFindr** (MIT), plus CSV, DataFrames and Graphs — optional,
+  used only by the BioFindr cross-check module (`modules/local/run_biofindr.nf`).
 
 Analysis and figures (`analysis/`):
 
 - **pandas**, **matplotlib**, **SciPy**, **scikit-learn**, **statsmodels** and **NetworkX**;
   the transcriptome-wide Manhattan panel optionally uses **R** with **ggplot2** and **ggrepel**.
 
-Please cite the tools that ask for it alongside this pipeline — in particular BioFindr
+Please cite the tools that ask for it alongside this pipeline — in particular findr
 (Wang & Michoel, *PLoS Comput. Biol.* 2017; *Bioinformatics* 2019) and Nextflow
 (Di Tommaso et al., *Nat. Biotechnol.* 2017).
 
