@@ -72,20 +72,18 @@ plt.rcParams.update({"font.family": "sans-serif", "font.sans-serif": ["Arial", "
 
 os.makedirs(OUT, exist_ok=True)
 A = pd.concat([pd.read_csv(f"{AD}/association_{t}_{TRAIT}.tsv", sep="\t") for t in TIS], ignore_index=True)
-# --- schema bridge for the python-findr association tables ---
-#   our files carry `p_value` (script expects `p`) and `config` (script expects `win_config`)
+# Rename columns to what the plotting code below expects: p_value -> p, config -> win_config.
 A["p"] = A["p_value"]
 A["win_config"] = A["config"]
 sig = A[A["p_adj"] < 0.05].copy()
 zcut = abs(norm.isf(sig["p"].max() / 2))
 
-# ---- (d) Manhattan: try the EXISTING R ggrepel renderer, else matplotlib fallback ----
+# ---- (d) Manhattan: use the R ggrepel renderer if available, else the matplotlib fallback ----
 M.ASSOC_DIR = Path(AD)
 M.ASSOC_FMT = "association_{tissue}_" + TRAIT + ".tsv"
 M.GENCODE = Path(ANNOT)
 M.TITLE = "Transcriptome-wide association with coronary artery disease"
-# best (min-p) tissue per unique gene, built from A (our files lack the `gene`/`p`
-# columns M.load_best_per_gene expects, so build it here and reuse M for positions).
+# best (min-p) row per unique gene; build it here and reuse M only for genomic positions.
 best = A.sort_values("p").drop_duplicates(subset="gene_id").reset_index(drop=True)
 best = M.attach_positions(best, M.load_gene_positions())
 n_pos = int(best["chrom"].notna().sum())

@@ -1,61 +1,92 @@
 #!/usr/bin/env python3
-"""Disease-regulatory flux-map figure of the manuscript (``fig_flux_map_grn``, ``fig:fluxgrn``).
+"""Disease-regulatory flux-map cascade figure (fig_flux_map_grn): a grid of per-gene cascades
+showing, for the most convergent disease genes, the hop-1 parents and hop-2 grandparents that
+feed them and the flux each contributes.
 
-The flux map drawn with the full GRN cascade: instead of drawing every regulator as a direct
-edge into the disease gene, the two-hop structure is shown explicitly -- grandparent (hop 2) ->
-parent (hop 1) -> disease gene. Edge width is |flux(ancestor -> gene)|, colour is the sign, and a
-gold ring marks an ancestor that is itself a disease gene. The genes shown are the most
-trans-driven, convergent (coherence > 0.7) gene-tissue cases pooled across the seven tissues.
+Each panel: grandparent (hop 2) -> parent (hop 1) -> disease gene; edge width = |flux|, colour =
+sign (red toward disease risk, blue away), a gold ring marks an ancestor that is itself a disease
+gene. The displayed gene-tissue cases are the most convergent (coherence > 0.7 and >= 4
+regulators), ranked by convergence x number of regulators and pooled across tissues.
 
-Inputs (per-gene / per-edge SUMMARY tables only -- no individual-level data), under RESULTS:
-  <AT>/association/association_<tissue>_<trait>.tsv   per-gene association (disease genes, z)
-  <FL>/flux_edges_<tissue>_<trait>.tsv                regulator -> target flux edges
-  <FEAT>/<tissue>.trans_features.tsv.gz               gene -> GRN-ancestor regulators (hop)
-  <NET>/dag_<tissue>_orig_kde_fdr15_alltargets.csv    reconstructed GRN edges
+Inputs (per tissue; tissues discovered from --flux-dir unless --tissues is given):
+  --flux-dir    flux_<tissue>_<trait>.csv          S4 flux edges (regulator,...,target,...,hop,flux)
+  --assoc-dir   association_<tissue>_<trait>.tsv    z_trans / z_twas / p_adj per gene
+  --feat-dir    <tissue>.trans_features.tsv.gz      hop of each (gene, ancestor)
+  --dag-dir     dag_<tissue>_<dag-tag>.csv          the GRN DAG (Source, Target) for parent links
+  --gencode     GENCODE genes tsv (gene_id, gene_name) for HGNC symbols
 
-Output: fig_flux_map_grn.{pdf,png} in the shared figures directory.
+Output (--outdir): fig_flux_map_grn.{pdf,png}
 
-Run:  GENE_ANNOT=<gencode.v19.genes.tsv> python analysis/figures/plot_flux_map_grn.py
-
-Input locations resolve under RESULTS (default results_cv/, override with FLUX_RESULTS); figures
-are written to results/figures/ by default (override with FLUX_FIGURES); gene symbols come from
-the annotation in $GENE_ANNOT. Style: Arial, 300 DPI.
+Usage:
+  plot_flux_cascades.py --flux-dir DIR --assoc-dir DIR --feat-dir DIR --dag-dir DIR \
+      --gencode FILE --outdir DIR [--trait CAD_aragam2022] [--dag-tag TAG] [--tissues ...]
 """
 import sys, os, numpy as np, pandas as pd
 from pathlib import Path
 import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, FancyArrowPatch
 from matplotlib.lines import Line2D
+import argparse, glob
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "utils")); import gene_labels as gl
 
-TRAIT = "CAD_aragam2022"
-# Input result locations resolve under RESULTS (default results_cv/, override with FLUX_RESULTS).
-RESULTS = Path(os.environ.get("FLUX_RESULTS", Path(__file__).resolve().parents[2] / "results_cv"))
-FL = f"{RESULTS}/horseshoe_alltargets/flux"
-AT = f"{RESULTS}/horseshoe_alltargets"
-NET = f"{RESULTS}/network_alltargets"
-FEAT = f"{RESULTS}/features_alltargets"
-# All figures go to one shared directory: results/figures/ by default (override with FLUX_FIGURES).
-OUT = str(os.environ.get("FLUX_FIGURES", Path(__file__).resolve().parents[2] / "results" / "figures"))
+ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+ap.add_argument("--flux-dir", required=True, help="dir with flux_<tissue>_<trait>.csv (S4 flux edges)")
+ap.add_argument("--assoc-dir", required=True, help="dir with association_<tissue>_<trait>.tsv")
+ap.add_argument("--feat-dir", required=True, help="dir with <tissue>.trans_features.tsv.gz")
+ap.add_argument("--dag-dir", required=True, help="dir with the GRN DAG csv (dag_<tissue>_<dag-tag>.csv)")
+ap.add_argument("--gencode", required=True, help="GENCODE genes tsv (gene_id, gene_name)")
+ap.add_argument("--outdir", required=True, help="output dir for the figure")
+ap.add_argument("--trait", default="CAD_aragam2022", help="trait label in the filenames")
+ap.add_argument("--dag-tag", default="orig_kde_fdr15_alltargets", help="DAG filename tag: dag_<tissue>_<tag>.csv")
+ap.add_argument("--tissues", nargs="+", default=None, help="tissue labels; default: discovered from --flux-dir")
+args = ap.parse_args()
+
+TRAIT = args.trait
+FL = args.flux_dir              # flux_<t>_<trait>.csv (S4 columns)
+AT = args.assoc_dir            # association_<t>_<trait>.tsv
+NET = args.dag_dir             # dag_<t>_<dag-tag>.csv
+FEAT = args.feat_dir           # <t>.trans_features.tsv.gz
+ANNOT = args.gencode
+OUT = args.outdir
+DAG_TAG = args.dag_tag
 os.makedirs(OUT, exist_ok=True)
-TISSUES = ["AOR", "Blood", "LIV", "MAM", "SF", "SKLM", "VAF"]
+TISSUES = args.tissues or sorted(
+    os.path.basename(f)[len("flux_"):].rsplit(f"_{TRAIT}.csv", 1)[0]
+    for f in glob.glob(f"{FL}/flux_*_{TRAIT}.csv"))
 C_CORE, C_POS, C_NEG = "#6a51a3", "#c1121f", "#2c6fbb"
 C_PARENT, C_GP, C_INT, C_DG = "#2171b5", "#9ecae1", "#cfcfcf", "#e8a000"
-NTOP_GENES, NP, NG = 18, 5, 6
+NCOLS = 6
+NROWS = 6
+NTOP_GENES, NP, NG = NCOLS * NROWS, 5, 6      # 6 rows x 6 cols = 36 gene-tissue cascade panels
+CONV_MIN, NREG_MIN = 0.7, 4
 plt.rcParams.update({"font.family": "sans-serif", "font.sans-serif": ["Arial", "DejaVu Sans"],
                      "pdf.fonttype": 42, "savefig.dpi": 300})
 
 
+def read_flux(t):
+    """S4-style flux CSV -> the figure's edge frame in Ensembl-id space with abs_flux.
+
+    The figure operates on Ensembl ids (association/trans-features/DAG are all Ensembl), so the
+    *_gene_id columns become `regulator`/`target`; the symbol columns are dropped."""
+    fe = pd.read_csv(f"{FL}/flux_{t}_{TRAIT}.csv")
+    # drop the HGNC-symbol columns; the figure works in Ensembl-id space
+    fe = fe.drop(columns=["regulator", "target"])
+    fe = fe.rename(columns={"regulator_gene_id": "regulator", "target_gene_id": "target"})
+    fe["flux"] = fe["flux"].astype(float)
+    fe["abs_flux"] = fe["flux"].abs()
+    return fe[["regulator", "target", "flux", "abs_flux"]]
+
+
 def main():
-    MAP = gl.load_label_map(gl.default_annot(os.environ.get("GENE_ANNOT")), "gene_id", "gene_name")
+    MAP = gl.load_label_map(ANNOT, "gene_id", "gene_name")
     data, cands = {}, []
     for t in TISSUES:
-        A = pd.read_csv(f"{AT}/association/association_{t}_{TRAIT}.tsv", sep="\t")
-        fe = pd.read_csv(f"{FL}/flux_edges_{t}_{TRAIT}.tsv", sep="\t")
+        A = pd.read_csv(f"{AT}/association_{t}_{TRAIT}.tsv", sep="\t")
+        fe = read_flux(t)
         tf = pd.read_csv(f"{FEAT}/{t}.trans_features.tsv.gz", sep="\t",
                          usecols=["gene_id", "hop", "source_gene_id"]).drop_duplicates()
         hop = {(g, a): h for g, h, a in zip(tf.gene_id, tf.hop, tf.source_gene_id)}
-        dag = pd.read_csv(f"{NET}/dag_{t}_orig_kde_fdr15_alltargets.csv", usecols=["Source", "Target"])
+        dag = pd.read_csv(f"{NET}/dag_{t}_{DAG_TAG}.csv", usecols=["Source", "Target"])
         dage = set(zip(dag.Source, dag.Target))
         par_of = dag.groupby("Target").Source.apply(set).to_dict()         # target -> {parents}
         data[t] = dict(fe=fe, hop=hop, dage=dage, par_of=par_of,
@@ -63,12 +94,34 @@ def main():
         grp = fe.groupby("target")
         nreg = grp.regulator.nunique(); conv = grp.flux.sum().abs() / grp.abs_flux.sum()
         s = A[(A.p_adj < 0.05) & A.z_trans.notna()].copy()
-        s = s[(s.gene_id.map(nreg).fillna(0) >= 4) & (s.gene_id.map(conv).fillna(0) > 0.7)]
+        s = s[(s.gene_id.map(nreg).fillna(0) >= NREG_MIN) & (s.gene_id.map(conv).fillna(0) > CONV_MIN)]
         for r in s.itertuples(index=False):
             cands.append({"tissue": t, "gene_id": r.gene_id, "z_trans": r.z_trans,
-                          "z_twas": r.z_twas, "conv": float(conv.get(r.gene_id, np.nan))})
+                          "z_twas": r.z_twas, "conv": float(conv.get(r.gene_id, np.nan)),
+                          "nreg": float(nreg.get(r.gene_id, 0))})
     C = pd.DataFrame(cands)
-    C = C.reindex(C.z_trans.abs().sort_values(ascending=False).index).head(NTOP_GENES).reset_index(drop=True)
+    print(f"[flux-map] candidate gene-tissue cases at conv>{CONV_MIN}, nreg>={NREG_MIN}: {len(C)}")
+    if len(C) < NTOP_GENES:
+        # relax the convergence floor just enough to fill the 6x6 grid
+        need = NTOP_GENES
+        relaxed = 0.5
+        C2 = []
+        for t in TISSUES:
+            A = pd.read_csv(f"{AT}/association_{t}_{TRAIT}.tsv", sep="\t")
+            fe = data[t]["fe"]; grp = fe.groupby("target")
+            nreg = grp.regulator.nunique(); conv = grp.flux.sum().abs() / grp.abs_flux.sum()
+            s = A[(A.p_adj < 0.05) & A.z_trans.notna()].copy()
+            s = s[(s.gene_id.map(nreg).fillna(0) >= NREG_MIN) & (s.gene_id.map(conv).fillna(0) > relaxed)]
+            for r in s.itertuples(index=False):
+                C2.append({"tissue": t, "gene_id": r.gene_id, "z_trans": r.z_trans,
+                           "z_twas": r.z_twas, "conv": float(conv.get(r.gene_id, np.nan)),
+                           "nreg": float(nreg.get(r.gene_id, 0))})
+        C = pd.DataFrame(C2)
+        print(f"[flux-map] relaxed conv>{relaxed} to fill grid: {len(C)} cases")
+    # rank by convergence AND regulator breadth (coherent convergence over many regulators),
+    # not convergence alone
+    C["score"] = C["conv"] * C["nreg"]
+    C = C.sort_values("score", ascending=False).head(NTOP_GENES).reset_index(drop=True)
 
     # assemble per-gene cascades
     panels, gmax = [], 0.0
@@ -95,7 +148,7 @@ def main():
                        pflux, gflux, link, list(inter)))
         gmax = max([gmax] + [abs(v) for v in pflux.values()] + [abs(v) for v in gflux.values()])
 
-    ncols = 6; nrows = int(np.ceil(len(panels) / ncols))
+    ncols = NCOLS; nrows = int(np.ceil(len(panels) / ncols))
     fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 4.0, nrows * 4.5)); axes = axes.ravel()
     YC, YP, YG = -1.45, -0.1, 1.25
     ew = lambda f: 0.6 + 4.6 * (abs(f) / gmax)
@@ -141,21 +194,21 @@ def main():
             node(p, pp, C_PARENT if p in pflux else C_INT)
             ax.text(px[p], YP - 0.16, gl.resolve(str(p), MAP), ha="center", va="top",
                     fontsize=6.4, fontweight="bold" if p in sig_genes else "normal")
-        # grandparents -> parent (or gene if unlinked); spread around their parent
-        bypar = {}
-        for gp in gps:
-            bypar.setdefault(link[gp], []).append(gp)
-        for tgt, glist in bypar.items():
-            cx = px.get(tgt, 0.0)
-            gxs = [cx] if len(glist) == 1 else np.linspace(cx - 0.5, cx + 0.5, len(glist))
-            for gp, gx in zip(glist, gxs):
-                gp_xy = np.array([gx, YG])
-                dest = np.array([px[tgt], YP]) if tgt in px else core
-                edge(gp_xy, dest, gflux[gp])
-                node(gp, gp_xy, C_GP)
-                ax.text(gx, YG + 0.12, gl.resolve(str(gp), MAP), ha="center", va="bottom",
-                        fontsize=6.0, rotation=35, rotation_mode="anchor",
-                        fontweight="bold" if gp in sig_genes else "normal")
+        # grandparents -> routing parent (or gene): each gene appears ONCE, spread to distinct
+        # x across the top row (sorted by routing-parent x to keep edges tidy) so nodes/labels
+        # never overlap. A gene already shown as a parent is not redrawn as a grandparent.
+        gps_u = [gp for gp in gps if gp not in midnodes]
+        gps_u = sorted(gps_u, key=lambda gp: (px.get(link[gp], 0.0), -abs(gflux[gp])))
+        gxs = [0.0] if len(gps_u) <= 1 else np.linspace(-1.4, 1.4, len(gps_u))
+        for gp, gx in zip(gps_u, gxs):
+            gp_xy = np.array([gx, YG])
+            tgt = link[gp]
+            dest = np.array([px[tgt], YP]) if tgt in px else core
+            edge(gp_xy, dest, gflux[gp])
+            node(gp, gp_xy, C_GP)
+            ax.text(gx, YG + 0.12, gl.resolve(str(gp), MAP), ha="center", va="bottom",
+                    fontsize=6.0, rotation=35, rotation_mode="anchor",
+                    fontweight="bold" if gp in sig_genes else "normal")
 
         ax.add_patch(Circle(core, 0.155, facecolor=C_CORE, edgecolor="white", lw=1.4, zorder=5))
         ax.text(-0.04, YC - 0.24, f"{t} ", ha="right", va="top", fontsize=8.5, fontweight="bold", color="#888")
@@ -175,13 +228,12 @@ def main():
                   markeredgewidth=2.2, markersize=13, label="ancestor also a disease gene"),
            Line2D([0], [0], color=C_POS, lw=3, label="flux toward disease risk"),
            Line2D([0], [0], color=C_NEG, lw=3, label="flux away from risk")]
-    fig.legend(handles=leg, loc="lower center", ncol=7, fontsize=9, frameon=False, bbox_to_anchor=(0.5, -0.02))
-    fig.subplots_adjust(left=0.02, right=0.98, top=0.97, bottom=0.07, hspace=0.18, wspace=0.06)
-    os.makedirs(OUT, exist_ok=True)
+    fig.legend(handles=leg, loc="lower center", ncol=7, fontsize=9, frameon=False, bbox_to_anchor=(0.5, -0.01))
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.97, bottom=0.05, hspace=0.18, wspace=0.06)
     for ext in ("pdf", "png"):
         fig.savefig(f"{OUT}/fig_flux_map_grn.{ext}", bbox_inches="tight")
     plt.close(fig)
-    print(f"wrote {OUT}/fig_flux_map_grn.pdf  ({len(panels)} genes, "
+    print(f"wrote {OUT}/fig_flux_map_grn.pdf  ({len(panels)} panels, {nrows} rows x {ncols} cols, "
           f"tissues {C.tissue.value_counts().to_dict()})")
 
 

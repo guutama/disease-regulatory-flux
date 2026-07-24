@@ -21,53 +21,65 @@ Outputs (written to <OUTDIR>):
   fig_main_readouts.{pdf,png}              the six-panel figure
   <FLUX>/perm_null_{in,out}_<trait>.npz    cached sign-flip null (reused across renders)
 
-Run:  GENE_ANNOT=<gencode.v19.genes.tsv> python analysis/figures/plot_main_readouts.py
+Run:  GENE_ANNOT=<gencode.v19.genes.tsv> python analysis/figure_scripts/plot_main_readouts.py
 
-Input result locations resolve under RESULTS -- by default the repo's own ``results_cv/``
-directory, overridable with the ``FLUX_RESULTS`` environment variable. Figures are written to the
-shared figures directory (``results/figures/`` by default, overridable with ``FLUX_FIGURES``).
-Gene symbols are resolved from the annotation given in ``$GENE_ANNOT``. Set ``RECOMPUTE_NULL=1``
-(or delete the .npz) to force a fresh permutation. Style: Arial, 300 DPI, (a)(b) panel labels.
+Input result locations resolve under RESULTS -- by default the repo's own ``results_findr_py/``
+directory, overridable with the ``FLUX_RESULTS`` environment variable. It reads the flux node/edge
+tables under ``<RESULTS>/flux/nodes`` and writes figures to ``<RESULTS>/figures`` (override with
+``FLUX_FIGURES``). Gene symbols are resolved from ``$GENE_ANNOT``. Set ``RECOMPUTE_NULL=1`` (or
+delete the .npz) to force a fresh permutation. Style: Arial, 300 DPI, (a)(b) panel labels.
 """
 import pandas as pd, numpy as np, sys, os
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "utils")); import gene_labels as gl
+_REPO = Path(__file__).resolve().parents[2]                  # analysis/figure_scripts/ -> repo root
+sys.path.insert(0, str(_REPO / "utils")); import gene_labels as gl
 from adjustText import adjust_text
 import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
 plt.rcParams.update({"font.family":"sans-serif","font.sans-serif":["Arial","DejaVu Sans"],
                      "font.size":9,"axes.linewidth":0.8,"savefig.dpi":300,"pdf.fonttype":42})
-# Result files this figure reads/writes, resolved under RESULTS. The default is the repo's own
-# results_cv/ directory; override the root with the FLUX_RESULTS environment variable.
-RESULTS = Path(os.environ.get("FLUX_RESULTS", Path(__file__).resolve().parents[2] / "results_cv"))
-AT = RESULTS / "horseshoe_alltargets"; FL = AT / "flux"
-# All figures are written to one shared directory: results/figures/ by default, overridable
-# with the FLUX_FIGURES environment variable.
-OUTDIR = Path(os.environ.get("FLUX_FIGURES", Path(__file__).resolve().parents[2] / "results" / "figures"))
+# Result files this figure reads/writes, resolved under RESULTS (default: the repo's
+# results_findr_py/; override the root with the FLUX_RESULTS environment variable). Reads the
+# flux node/edge tables under <RESULTS>/flux/nodes, writes figures to <RESULTS>/figures.
+RESULTS = Path(os.environ.get("FLUX_RESULTS", _REPO / "results_findr_py"))
+FL = RESULTS / "flux" / "nodes"; AT = FL
+OUTDIR = Path(os.environ.get("FLUX_FIGURES", RESULTS / "figures"))
+ANNOT = os.environ.get("GENE_ANNOT",
+    "/cluster/projects/nn1015k/datasets/references/gencode/GRCh37/gencode.v19.genes.tsv")
 os.makedirs(OUTDIR, exist_ok=True)
 TIS=["AOR","Blood","LIV","MAM","SF","SKLM","VAF"]
 base=lambda g:str(g).split(".")[0]; THR=0.7
 N=pd.concat([pd.read_csv(f"{FL}/flux_nodes_{t}_CAD_aragam2022.tsv",sep="\t") for t in TIS],ignore_index=True)
+# out_degree is the broadcast breadth (# distinct disease targets fed); alias it to
+# n_disease_targets, the name the panels below use.
+if "n_disease_targets" not in N.columns:
+    N["n_disease_targets"]=N["out_degree"]
 for c in ["z_twas","out_flux","net_out","in_flux","net_in","in_degree","out_degree","n_disease_targets"]:
     N[c]=pd.to_numeric(N[c],errors="coerce")
 N["az"]=N.z_twas.abs().fillna(0); N["sig"]=N.disease_sig==True
 N["coh_out"]=(N.net_out.abs()/N.out_flux.replace(0,np.nan))
 N["coh_in"] =(N.net_in.abs()/N.in_flux.replace(0,np.nan))
-MAP=gl.load_label_map(gl.default_annot(os.environ.get("GENE_ANNOT")))
+MAP=gl.load_label_map(ANNOT)
 N["sym"]=N.gene_id.map(lambda g:gl.resolve(g,MAP))
 N["pmr"]=N["is_pmr"].astype(str).str.lower().isin(["true","1","1.0"])
 thr=N.loc[N.sig,"az"].min()
+# Shared own-signal |z_TWAS| ceiling for panels a, c, d, so the z-score axis is on one scale
+# across all three. Set by the broadcasters shown in c/d; a handful of very
+# high-|z| disease genes beyond it are clipped into panel a's top bin (noted on the axis).
+_bmask=N.n_disease_targets.fillna(0)>10
+ZMAX=float(np.ceil(N.loc[_bmask,"az"].max()))+1
+BOX=dict(boxstyle="round,pad=0.3",fc="white",ec="#cccccc",alpha=0.92)
 
 fig,ax=plt.subplots(2,3,figsize=(16.5,9)); (A,B,C),(D,E,F)=ax
 
-# (a) DIRECT EVIDENCE
-A.hist(N.loc[N.sig,"az"],bins=np.linspace(0,12,45),color="#c1121f",alpha=.85,label=f"disease gene  ({int(N.sig.sum()):,})")
-A.hist(N.loc[~N.sig,"az"],bins=np.linspace(0,12,45),color="#cccccc",alpha=.85,label=f"not significant  ({int((~N.sig).sum()):,})")
+# (a) DIRECT EVIDENCE -- own-signal distribution on the shared |z_TWAS| scale (0..ZMAX);
+# the few genes with |z|>ZMAX fall outside the axis range and are not shown.
+A.hist(N.loc[N.sig,"az"],bins=np.linspace(0,ZMAX,45),color="#c1121f",alpha=.85,label=f"disease gene  ({int(N.sig.sum()):,})")
+A.hist(N.loc[~N.sig,"az"],bins=np.linspace(0,ZMAX,45),color="#cccccc",alpha=.85,label=f"not significant  ({int((~N.sig).sum()):,})")
 A.axvline(thr,ls="--",lw=1,color="#333")
-BOX=dict(boxstyle="round,pad=0.3",fc="white",ec="#cccccc",alpha=0.92)
 A.set_ylim(0,A.get_ylim()[1]*1.12)
 A.annotate(f"FDR 0.05\n|z| = {thr:.1f}",xy=(thr,A.get_ylim()[1]*.5),xytext=(thr+1.6,A.get_ylim()[1]*.62),
            fontsize=7.5,color="#333",ha="center",bbox=BOX,arrowprops=dict(arrowstyle="->",color="#333",lw=.8))
-A.set_xlabel("own genetic signal  |z$_{\\mathrm{TWAS}}$|"); A.set_ylabel("genes"); A.legend(frameon=False,fontsize=8,loc="upper right")
+A.set_xlim(0,ZMAX); A.set_xlabel("own genetic signal  |z$_{\\mathrm{TWAS}}$|  (z-score)"); A.set_ylabel("genes"); A.legend(frameon=False,fontsize=8,loc="upper right")
 A.set_title("(a) Direct evidence — is the gene a disease gene?",loc="left",fontweight="bold",fontsize=9.7)
 
 # (b) INVOLVEMENT = receiving (in-degree) vs broadcasting (out-degree), per gene class -- diverging bars
@@ -77,15 +89,19 @@ N["cls"]=N.apply(_cls,axis=1)
 classes=["minor regulator","key driver","core (sink)","core master reg"]; y=np.arange(len(classes))
 inm =[N[N.cls==q].in_degree.fillna(0).mean()  for q in classes]
 outm=[N[N.cls==q].out_degree.fillna(0).mean() for q in classes]
-B.barh(y,[-v for v in inm],color="#2166ac",edgecolor="white",height=.7,label="receives from  (# regulators)")
-B.barh(y,outm,color="#e08214",edgecolor="white",height=.7,label="broadcasts to  (# disease genes)")
-for yi,(iv,ov) in enumerate(zip(inm,outm)):
-    if iv>0.3: B.text(-iv-0.6,yi,f"{iv:.0f}",ha="right",va="center",fontsize=7.5)
-    if ov>0.3: B.text(ov+0.6,yi,f"{ov:.0f}",ha="left",va="center",fontsize=7.5)
+insd =[N[N.cls==q].in_degree.fillna(0).std(ddof=0)  for q in classes]   # SD across gene-tissue instances
+outsd=[N[N.cls==q].out_degree.fillna(0).std(ddof=0) for q in classes]
+B.barh(y,[-v for v in inm],xerr=insd,color="#2166ac",edgecolor="white",height=.7,
+       error_kw=dict(ecolor="#0b355e",elinewidth=.9,capsize=2.5),label="receives from  (# regulators)")
+B.barh(y,outm,xerr=outsd,color="#e08214",edgecolor="white",height=.7,
+       error_kw=dict(ecolor="#8a4b06",elinewidth=.9,capsize=2.5),label="broadcasts to  (# disease genes)")
+for yi,(iv,ivs,ov,ovs) in enumerate(zip(inm,insd,outm,outsd)):
+    if iv>0.3: B.text(-iv-ivs-0.8,yi,f"{iv:.1f}$\\pm${ivs:.1f}",ha="right",va="center",fontsize=6.8)
+    if ov>0.3: B.text(ov+ovs+0.8,yi,f"{ov:.1f}$\\pm${ovs:.1f}",ha="left",va="center",fontsize=6.8)
 B.axvline(0,color="#333",lw=.9)
 B.set_yticks(y); B.set_yticklabels([f"{c}\n(n={int((N.cls==c).sum())})" for c in classes],fontsize=8)
-B.set_xlabel("$\\leftarrow$ receives from        broadcasts to $\\rightarrow$   (mean # links)")
-mx=max(max(inm),max(outm))*1.25; B.set_xlim(-mx,mx)
+B.set_xlabel("$\\leftarrow$ receives from        broadcasts to $\\rightarrow$   (mean $\\pm$ SD # links)")
+mx=max(max(i+s for i,s in zip(inm,insd)),max(o+s for o,s in zip(outm,outsd)))*1.32; B.set_xlim(-mx,mx)
 from matplotlib.ticker import FuncFormatter
 B.xaxis.set_major_formatter(FuncFormatter(lambda v,_: f"{abs(v):g}"))   # show |value| (both sides positive)
 B.legend(frameon=False,fontsize=7.3,loc="lower left")
@@ -143,11 +159,6 @@ def panel(ax,arrs,seed,col,xlab,title,sig,show_n=True,key=None,legloc="upper rig
     ax.axvline(po,color=col,lw=2.8,zorder=4,label=f"observed  ({po:.0f}%)")
     lo=min(pn.min(),po); hi=max(pn.max(),po); pad=(hi-lo)*0.16+0.6
     ax.set_xlim(lo-pad,hi+pad); ax.set_ylim(0,ax.get_ylim()[1]*1.25); top=ax.get_ylim()[1]
-    if sig:
-        ax.annotate("",xy=(po,top*0.5),xytext=(mu,top*0.5),arrowprops=dict(arrowstyle="<->",color=col,lw=1.5))
-        ax.text((po+mu)/2,top*0.56,f"observed $\\gg$ null\nz = {z:.0f}$\\sigma$\n{pstr}",
-                ha="center",va="bottom",fontsize=8,color=col,bbox=BOX)
-        ax.text(mu,top*0.5,f"null\n{mu:.0f}%",ha="right",va="center",fontsize=7,color="#777")
     ax.set_xlabel(xlab); ax.set_ylabel("null density"); ax.set_yticks([])
     ax.legend(frameon=False,fontsize=7.6,loc=legloc)
     if show_n:
@@ -156,27 +167,35 @@ def panel(ax,arrs,seed,col,xlab,title,sig,show_n=True,key=None,legloc="upper rig
     ax.set_title(title,loc="left",fontweight="bold",fontsize=9.7)
     return z
 
-# (c) KEY DRIVERS  &  (d) CORE MASTER REGULATORS -- own signal vs broadcasting breadth
+# (c) KEY DRIVERS  &  (d) CORE MASTER REGULATORS -- own signal vs broadcasting breadth.
+# Both panels share the SAME own-signal axis |z_TWAS| (a z-score): key drivers sit entirely
+# BELOW the FDR line (non-significant), master regulators entirely ABOVE it (significant) --
+# the differing regimes are the point, so a common y-scale makes them directly comparable.
+# The x-axis (out-flux) is the total flux a regulator broadcasts to its disease targets.
 N["bcast2"]=N.n_disease_targets>10
-kd =N[(~N.sig)&N.bcast2].copy()                          # key drivers (229)
-cmr=N[N.sig & N.bcast2].copy()                           # core master regulators (35)
+kd =N[(~N.sig)&N.bcast2].copy()                          # key drivers: non-significant broadcasters
+cmr=N[N.sig & N.bcast2].copy()                           # core master regulators: significant broadcasters
 kdl=kd[(kd.n_disease_targets>20)&(kd.out_flux>5)]        # key drivers worth labelling
+zmax=ZMAX                                                # shared own-signal (|z_TWAS|) ceiling (same as panel a)
+ZLAB="|z$_{\\mathrm{TWAS}}$|  (own signal, z-score)"
+XLAB="out-flux  (total flux broadcast to disease genes)"
 
-# (c) key drivers
-C.scatter(kd.out_flux,kd.az,s=16,c="#2166ac",alpha=0.5,edgecolors="none",zorder=2)
-C.scatter(kdl.out_flux,kdl.az,s=30,c="#0d3a66",alpha=0.95,edgecolors="white",linewidths=0.3,zorder=3)
-C.axhline(thr,ls="--",lw=1,color="#888"); C.text(kd.out_flux.max(),thr+0.05,"FDR 0.05",ha="right",va="bottom",fontsize=7.5,color="#888")
-tC=[C.text(r.out_flux,r.az,f"{r.sym} ({int(r.n_disease_targets)})",fontsize=6.6,color="#0d3a66",fontstyle="italic") for _,r in kdl.iterrows()]
-adjust_text(tC,ax=C,arrowprops=dict(arrowstyle="-",color="#bbb",lw=0.4),expand=(1.05,1.3),force_text=(0.4,0.6))
-C.set_xlabel("out-flux  (signal broadcast to disease genes)"); C.set_ylabel("|z$_{\\mathrm{TWAS}}$|  (own signal)")
+# (c) key drivers -- own axis to 5 (all key drivers sit below the FDR line), label ALL of them
+C.scatter(kd.out_flux,kd.az,s=22,c="#0d3a66",alpha=0.9,edgecolors="white",linewidths=0.3,zorder=3)
+C.set_ylim(0,3.5); C.set_yticks([0,1,2,3])
+C.axhline(thr,ls="--",lw=1,color="#888"); C.text(C.get_xlim()[1],thr+0.05,"FDR 0.05",ha="right",va="bottom",fontsize=7.5,color="#888")
+tC=[C.text(r.out_flux,r.az,f"{r.sym} ({r.tissue}, {int(r.n_disease_targets)})",fontsize=4.8,color="#0d3a66",fontstyle="italic") for _,r in kd.iterrows()]
+adjust_text(tC,ax=C,arrowprops=dict(arrowstyle="-",color="#bbb",lw=0.35),expand=(1.05,1.25),force_text=(0.35,0.5))
+C.set_xlabel(XLAB); C.set_ylabel(ZLAB)
 C.set_title(f"(c) Key drivers — own signal vs broadcast  (n = {len(kd)})",loc="left",fontweight="bold",fontsize=9.7)
 
 # (d) core master regulators -- label all
 D.scatter(cmr.out_flux,cmr.az,s=42,c="#c1121f",alpha=0.9,edgecolors="white",linewidths=0.3,zorder=3)
-D.axhline(thr,ls="--",lw=1,color="#888"); D.text(cmr.out_flux.max(),thr+0.08,"FDR 0.05",ha="right",va="bottom",fontsize=7.5,color="#888")
-tD=[D.text(r.out_flux,r.az,f"{r.sym} ({int(r.n_disease_targets)})",fontsize=6.6,color="#7a0e15",fontstyle="italic") for _,r in cmr.iterrows()]
+D.set_ylim(0,zmax)
+D.axhline(thr,ls="--",lw=1,color="#888"); D.text(D.get_xlim()[1],thr+0.15,"FDR 0.05",ha="right",va="bottom",fontsize=7.5,color="#888")
+tD=[D.text(r.out_flux,r.az,f"{r.sym} ({r.tissue}, {int(r.n_disease_targets)})",fontsize=6.2,color="#7a0e15",fontstyle="italic") for _,r in cmr.iterrows()]
 adjust_text(tD,ax=D,arrowprops=dict(arrowstyle="-",color="#bbb",lw=0.4),expand=(1.05,1.3),force_text=(0.4,0.6))
-D.set_xlabel("out-flux  (signal broadcast to disease genes)"); D.set_ylabel("|z$_{\\mathrm{TWAS}}$|  (own signal)")
+D.set_xlabel(XLAB); D.set_ylabel(ZLAB)
 D.set_title(f"(d) Core master regulators — own signal vs broadcast  (n = {len(cmr)})",loc="left",fontweight="bold",fontsize=9.7)
 
 # (e) COORDINATED OUT  &  (f) CONVERGENCE IN -- permutation-null panels
