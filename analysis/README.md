@@ -18,7 +18,7 @@ analysis/
 STARNET is individual-level, controlled-access data (dbGaP/EGA); the raw genotypes, expression
 matrices and cohort phenotypes require data-access approval and are **not** included in this
 repository. The scripts read the pipeline's per-gene, per-edge and per-tissue *summary* result
-files and write figures — no individual-level data is committed or emitted.
+files and write figures.
 
 ## Environment variables
 
@@ -71,7 +71,6 @@ Figures are Arial, 300 DPI.
 
 The supplementary tables (S1–S14) are provided under `supplementary_tables/`, each with a
 column-by-column data dictionary in `supplementary_tables/README.md`, and are archived on Zenodo.
-They carry gene-, edge- and tissue-level summaries only.
 
 ## External validation
 

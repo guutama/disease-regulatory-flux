@@ -13,7 +13,7 @@ Panels (e) and (f) share the coherence axis to show the asymmetry (broadcasting 
 regulation of disease genes is convergent); each shows a sign-flip permutation null with the
 observed value drawn on top.
 
-Inputs (per-gene / per-edge SUMMARY tables only -- no individual-level data):
+Inputs (per-gene / per-edge summary tables):
   <FLUX>/flux_nodes_<tissue>_<trait>.tsv   per-gene node roles, flux and coherence terms
   <FLUX>/flux_edges_<tissue>_<trait>.tsv   regulator -> target flux edges (for the coherence panels)
 
