@@ -12,10 +12,21 @@ kept:
   cis_trans   both channels together.
 
 A gene with both channels is fit in all three; a gene with only one channel is fit in that
-one. Each configuration is fit by MCMC (NumPyro) and scored by PSIS leave-one-out
-cross-validation (ArviZ): the configuration with the highest expected log predictive density
-(elpd) is selected, and the gene counts as predictable when the selected model's leave-one-out
-R^2 reaches a threshold.
+one. Each configuration is fit by MCMC (NumPyro) and scored by the configuration with the
+highest expected log predictive density (elpd); the gene counts as predictable when the
+selected model's leave-one-out R^2 reaches a threshold.
+
+Evaluation depends on whether a held-out test fold is supplied (--train-samples/--test-samples):
+
+  no test fold (the whole cohort trains and scores itself)
+      each configuration is scored by PSIS leave-one-out cross-validation (ArviZ) on all
+      samples. This is the small-cohort default, used when the test file is empty (the Stage 5
+      split with train fraction 1).
+  a held-out test fold is supplied
+      the model is fit on the train samples only and scored on the test samples: the loo_r2_*
+      columns then hold the genuine held-out test-set R^2 and the elpd_* columns the held-out
+      log predictive density, and selection and the predictable flag use those out-of-sample
+      values in place of the PSIS-LOO estimates. The written weights are the train-only fit.
 
 Method (--method), a channel-aware prior over the coefficients:
   bayes_ridge  (default) a Gaussian ridge with a separate scale per channel,
@@ -28,13 +39,16 @@ Inputs (one tissue):
   --expression     harmonised gene-by-sample expression matrix (the response per gene);
   --genotype       0/1/2 hard-call genotype matrix (variant_id + sample columns);
   --cis-pruned     LD-pruned per-gene cis-SNP set (gene_id, variant_id);
-  --trans-features per-gene trans-feature SNPs (gene_id, hop, source_gene_id, variant_id).
+  --trans-features per-gene trans-feature SNPs (gene_id, hop, source_gene_id, variant_id);
+  --train-samples  optional one-id-per-line list restricting the fit to these samples;
+  --test-samples   optional held-out list scored out-of-sample (empty file -> whole-cohort
+                   PSIS-LOO, so the Stage 5 train-fraction-1 split reproduces the default).
 
 Output (in --outdir), for tissue <tissue>:
-  <tissue>.expr_model_metrics.tsv.gz  one row per gene: per-configuration LOO-R^2 and elpd,
-                                      the gene class, the selected config, the selected
-                                      model's genetic standard deviation and intercept, and
-                                      whether the gene is predictable;
+  <tissue>.expr_model_metrics.tsv.gz  one row per gene: per-configuration LOO-R^2, elpd and the
+                                      PSIS-LOO Pareto-k diagnostic (khat), the gene class, the
+                                      selected config, the selected model's khat, genetic standard
+                                      deviation and intercept, and whether the gene is predictable;
   <tissue>.expr_model_weights.tsv.gz  long posterior-mean raw-dosage weights: gene_id, method,
                                       config, channel, variant_id, chromosome, position, ref, alt,
                                       weight (alleles carried so a foreign cohort can align);
@@ -68,6 +82,9 @@ except Exception:
     pass
 
 PRED_THRESHOLD = 0.01
+# A held-out fold this small cannot support an R^2, so we fall back to whole-cohort PSIS-LOO.
+MIN_HELDOUT_TEST = 3
+MIN_HELDOUT_TRAIN = 10
 _MODEL_CACHE: dict = {}
 
 # Column layout of the per-gene metrics table (shared by the full run and the per-chunk shards,
@@ -76,7 +93,8 @@ SHORT = {"cis_only": "cis", "trans_only": "trans", "cis_trans": "cistrans"}
 METRIC_COLS = (["gene_id", "gene_class", "n_cis", "n_trans"]
                + [f"loo_r2_{c}" for c in SHORT.values()]
                + [f"elpd_{c}" for c in SHORT.values()]
-               + ["best_config", "best_loo_r2", "best_elpd", "best_sigma_g",
+               + [f"khat_{c}" for c in SHORT.values()]     # PSIS-LOO Pareto-k diagnostic per config
+               + ["best_config", "best_loo_r2", "best_elpd", "best_khat", "best_sigma_g",
                   "best_intercept", "predictable"])
 
 # Each configuration gets a fixed slot so a gene's MCMC seed depends only on the gene's position
@@ -164,6 +182,18 @@ def load_genotype(path: str, delim: str, variant_col: str, wanted: set[str]):
                 geno[f[0]] = np.array(f[5:], dtype=np.float64)
                 alleles[f[0]] = (f[1], f[2], f[3], f[4])
     return samples, geno, alleles
+
+
+def load_sample_ids(path: str) -> list[str]:
+    """One sample id per line (blank lines skipped). An empty file yields an empty list, which
+    the caller treats as 'no held-out fold' -> whole-cohort scoring."""
+    out: list[str] = []
+    with _open(path) as fh:
+        for line in fh:
+            s = line.strip()
+            if s:
+                out.append(s)
+    return out
 
 
 def load_variant_map(path: str, delim: str, key_col: str):
@@ -255,13 +285,28 @@ def _build_models():
     return _MODEL_CACHE
 
 
-def fit(method: str, Xstd: np.ndarray, channel: np.ndarray, n_ch: int, yc: np.ndarray,
-        *, seed: int, warmup: int, samples: int):
-    """Fit one configuration by MCMC and score it by PSIS leave-one-out cross-validation.
+def _norm_logpdf(y: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> np.ndarray:
+    """Gaussian log-density, broadcast over draws for the held-out predictive density."""
+    return -0.5 * np.log(2.0 * np.pi) - np.log(sigma) - 0.5 * ((y - mu) / sigma) ** 2
 
-    Returns the posterior-mean coefficients (standardised-X space), the LOO-R^2 (from the
-    PSIS-weighted leave-one-out predictions), the in-sample R^2, the elpd and its Pareto-k
-    diagnostic."""
+
+def _r2(yc: np.ndarray, yhat: np.ndarray) -> float:
+    sst = float(np.sum((yc - yc.mean()) ** 2))
+    return float(1 - np.sum((yc - yhat) ** 2) / sst) if sst > 0 else float("nan")
+
+
+def fit(method: str, Xstd: np.ndarray, channel: np.ndarray, n_ch: int, yc: np.ndarray,
+        *, seed: int, warmup: int, samples: int,
+        Xstd_test: np.ndarray | None = None, yc_test: np.ndarray | None = None):
+    """Fit one configuration by MCMC and score it.
+
+    With no test fold the configuration is scored by PSIS leave-one-out cross-validation on the
+    training samples. When Xstd_test/yc_test are given the model is fit on the training samples
+    only and scored out-of-sample on the held-out fold: loo_r2 then holds the held-out test-set
+    R^2 (posterior-mean prediction) and elpd the held-out log predictive density.
+
+    Returns the posterior-mean coefficients (standardised-X space), the scoring R^2, the
+    in-sample R^2, the elpd and its Pareto-k diagnostic (Pareto-k is n/a for a held-out fold)."""
     import jax
     import jax.numpy as jnp
     from numpyro.infer import MCMC, NUTS, log_likelihood
@@ -276,6 +321,21 @@ def fit(method: str, Xstd: np.ndarray, channel: np.ndarray, n_ch: int, yc: np.nd
     post = mcmc.get_samples()
     mu = np.asarray(post["mu"])
     beta_std = np.asarray(post["beta"]).mean(0)
+    in_r2 = _r2(yc, mu.mean(0))
+
+    if Xstd_test is not None:
+        # Held-out test fold: predict the test samples from the train-only posterior.
+        beta_draws = np.asarray(post["beta"])                  # (S, p)
+        sigma_draws = np.asarray(post["sigma"])                # (S,)
+        mu_te = np.asarray(Xstd_test) @ beta_draws.T           # (n_test, S)
+        test_r2 = _r2(yc_test, mu_te.mean(1))
+        # Held-out log predictive density: per point, log-mean-exp over draws of N(y|mu,sigma).
+        ll_te = _norm_logpdf(np.asarray(yc_test)[:, None], mu_te, sigma_draws[None, :])
+        m = ll_te.max(axis=1)
+        lppd = m + np.log(np.mean(np.exp(ll_te - m[:, None]), axis=1))
+        return dict(beta_std=beta_std, loo_r2=test_r2, in_r2=in_r2, elpd=float(lppd.sum()),
+                    p_loo=float("nan"), khat=float("nan"))
+
     ll = np.asarray(log_likelihood(model_fn, post, Xj, ch, n_ch, y=yj)["y"])
     s = mu.shape[0]
     idata = az.from_dict(posterior={"sigma": np.asarray(post["sigma"])[None]},
@@ -287,9 +347,7 @@ def fit(method: str, Xstd: np.ndarray, channel: np.ndarray, n_ch: int, yc: np.nd
     logw, _ = az.psislw(-ll.T, reff=reff)
     w = np.exp(np.asarray(logw))
     yhat_loo = np.einsum("ns,sn->n", w, mu)
-    sst = float(np.sum((yc - yc.mean()) ** 2))
-    loo_r2 = float(1 - np.sum((yc - yhat_loo) ** 2) / sst) if sst > 0 else float("nan")
-    in_r2 = float(1 - np.sum((yc - mu.mean(0)) ** 2) / sst) if sst > 0 else float("nan")
+    loo_r2 = _r2(yc, yhat_loo)
     return dict(beta_std=beta_std, loo_r2=loo_r2, in_r2=in_r2, elpd=elpd,
                 p_loo=float(loo.p_loo), khat=khat)
 
@@ -335,6 +393,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--trans-features", required=True, help="input: per-gene trans-feature SNPs")
     p.add_argument("--tissue", required=True, help="tissue label, used to name the outputs")
     p.add_argument("--outdir", required=True, help="output directory")
+    p.add_argument("--train-samples", default=None,
+                   help="optional one-id-per-line list; the fit uses only these samples")
+    p.add_argument("--test-samples", default=None,
+                   help="optional held-out one-id-per-line list scored out-of-sample; an empty "
+                        "file (or too few test samples) falls back to whole-cohort PSIS-LOO")
     p.add_argument("--method", choices=["bayes_ridge", "horseshoe", "bslmm"],
                    default="bayes_ridge", help="channel-aware prior (default: bayes_ridge)")
     p.add_argument("--min-cis", type=int, default=1,
@@ -421,8 +484,26 @@ def main(argv=None) -> None:
     if not common:
         raise SystemExit("The expression and genotype matrices share no samples.")
     e_pos = {s: i for i, s in enumerate(expr_samples)}
-    e_idx = np.array([e_pos[s] for s in common])
-    g_idx = np.array([geno_pos[s] for s in common])
+
+    # Held-out mode: fit on the train fold, score on the test fold. Falls back to whole-cohort
+    # PSIS-LOO when no test fold is given, the test file is empty (train fraction 1), or either
+    # fold is too small to support the held-out estimate.
+    train_ids = set(load_sample_ids(args.train_samples)) if args.train_samples else None
+    test_ids = set(load_sample_ids(args.test_samples)) if args.test_samples else set()
+    train_samp = [s for s in common if s in train_ids] if train_ids else list(common)
+    test_samp = [s for s in common if s in test_ids]
+    heldout = len(test_samp) >= MIN_HELDOUT_TEST and len(train_samp) >= MIN_HELDOUT_TRAIN
+    if not heldout:                       # score the whole cohort against itself (PSIS-LOO)
+        train_samp, test_samp = list(common), []
+    eval_mode = "heldout_test" if heldout else "loo"
+
+    e_idx = np.array([e_pos[s] for s in train_samp])
+    g_idx = np.array([geno_pos[s] for s in train_samp])
+    e_idx_te = np.array([e_pos[s] for s in test_samp]) if heldout else None
+    g_idx_te = np.array([geno_pos[s] for s in test_samp]) if heldout else None
+    args.eval_mode, args.n_train, args.n_test = eval_mode, len(train_samp), len(test_samp)
+    sys.stderr.write(f"[fit_expression_models] tissue={args.tissue} eval={eval_mode} "
+                     f"n_train={len(train_samp)} n_test={len(test_samp)}\n")
 
     os.makedirs(args.outdir, exist_ok=True)
     if sharded:                                # per-gene shards; tissue-level files come from aggregation
@@ -441,7 +522,7 @@ def main(argv=None) -> None:
     metrics: list[dict] = []
 
     def fit_config(gene: str, gidx: int, config: str, variants: list[str], channels: list[str],
-                   yc: np.ndarray, ymu: float, n_ch: int):
+                   yc: np.ndarray, ymu: float, n_ch: int, yc_test: np.ndarray | None = None):
         cols = [geno[v][g_idx] for v in variants]
         Xstd, mu, sd, keep = standardise(cols)
         if Xstd.shape[1] == 0:
@@ -451,8 +532,13 @@ def main(argv=None) -> None:
         ch = np.array([0 if channels[i] == "cis" else n_ch - 1 for i in kept])
         # deterministic per (base seed, gene position in full list, config) -> chunk-invariant
         seed = args.seed + gidx * len(CONFIG_SLOT) + CONFIG_SLOT[config]
+        Xstd_te = None
+        if heldout:                        # standardise the test fold with the train mean/sd
+            cols_te = [geno[v][g_idx_te] for v in variants]
+            Xstd_te = (np.column_stack(cols_te).astype(np.float64)[:, keep] - mu) / sd
         r = fit(args.method, Xstd, ch, n_ch, yc, seed=seed,
-                warmup=args.mcmc_warmup, samples=args.mcmc_samples)
+                warmup=args.mcmc_warmup, samples=args.mcmc_samples,
+                Xstd_test=Xstd_te, yc_test=yc_test)
         w_raw = r["beta_std"] / sd
         b0 = ymu - float(np.sum(w_raw * mu))
         Xraw = np.column_stack(cols).astype(np.float64)[:, keep]
@@ -473,6 +559,8 @@ def main(argv=None) -> None:
         y = expr[gene][e_idx]
         ymu = float(y.mean())
         yc = y - ymu
+        # Held-out response is centred by the TRAIN mean, so predictions and R^2 stay consistent.
+        yc_te = (expr[gene][e_idx_te] - ymu) if heldout else None
         cis_v = [v for v in cis_map.get(gene, ()) if v in geno]
         cis_set = set(cis_v)
         trans_v = [v for v in trans_map.get(gene, ()) if v in geno and v not in cis_set]
@@ -482,20 +570,20 @@ def main(argv=None) -> None:
         has_cis = len(cis_v) >= args.min_cis
 
         if has_cis:
-            m = fit_config(gene, gidx, "cis_only", cis_v, ["cis"] * len(cis_v), yc, ymu, 1)
+            m = fit_config(gene, gidx, "cis_only", cis_v, ["cis"] * len(cis_v), yc, ymu, 1, yc_te)
             if m:
                 metrics.append(m)
             if trans_v:
-                m = fit_config(gene, gidx, "trans_only", trans_v, ["trans"] * len(trans_v), yc, ymu, 1)
+                m = fit_config(gene, gidx, "trans_only", trans_v, ["trans"] * len(trans_v), yc, ymu, 1, yc_te)
                 if m:
                     metrics.append(m)
                 allv = cis_v + trans_v
                 ch = ["cis"] * len(cis_v) + ["trans"] * len(trans_v)
-                m = fit_config(gene, gidx, "cis_trans", allv, ch, yc, ymu, 2)
+                m = fit_config(gene, gidx, "cis_trans", allv, ch, yc, ymu, 2, yc_te)
                 if m:
                     metrics.append(m)
         elif trans_v:
-            m = fit_config(gene, gidx, "trans_only", trans_v, ["trans"] * len(trans_v), yc, ymu, 1)
+            m = fit_config(gene, gidx, "trans_only", trans_v, ["trans"] * len(trans_v), yc, ymu, 1, yc_te)
             if m:
                 metrics.append(m)
         _free_jax_memory()   # bound RSS: drop this gene's compiled executables before the next
@@ -527,10 +615,12 @@ def build_rows(metrics: list[dict], pred_threshold: float = PRED_THRESHOLD) -> l
         for cfg, s in SHORT.items():
             row[f"loo_r2_{s}"] = cfgs[cfg]["loo_r2"] if cfg in cfgs else ""
             row[f"elpd_{s}"] = cfgs[cfg]["elpd"] if cfg in cfgs else ""
+            row[f"khat_{s}"] = cfgs[cfg]["khat"] if cfg in cfgs else ""
         best = max(cfgs.values(), key=lambda m: m["elpd"])
         row["best_config"] = best["config"]
         row["best_loo_r2"] = best["loo_r2"]
         row["best_elpd"] = best["elpd"]
+        row["best_khat"] = best["khat"]
         row["best_sigma_g"] = best["sigma_g"]
         row["best_intercept"] = best["intercept"]
         row["predictable"] = best["loo_r2"] >= pred_threshold
@@ -575,7 +665,9 @@ def write_stats(rows: list[dict], args):
         vals = [float(r[key]) for r in rows if r[key] != ""]
         return float(np.mean(vals)) if vals else float("nan")
 
-    lines = [("tissue", args.tissue), ("method", args.method), ("n_genes", len(rows))]
+    lines = [("tissue", args.tissue), ("method", args.method), ("n_genes", len(rows)),
+             ("eval_mode", getattr(args, "eval_mode", "loo")),
+             ("n_train", getattr(args, "n_train", "")), ("n_test", getattr(args, "n_test", ""))]
     for cls in classes:
         lines.append((f"n_{cls}", sum(1 for r in rows if r["gene_class"] == cls)))
     lines.append(("n_predictable", len(pred)))
@@ -585,6 +677,18 @@ def write_stats(rows: list[dict], args):
         lines.append((f"n_selected_{cfg}", sum(1 for r in pred if r["best_config"] == cfg)))
     for s in ("cis", "trans", "cistrans"):
         lines.append((f"loo_r2_{s}_mean", mean_loo(f"loo_r2_{s}")))
+    # PSIS-LOO reliability: the Pareto-k of each gene's selected model. k_hat <= 0.7 is reliable;
+    # values above flag genes where the LOO estimate should be read with caution.
+    khats = [float(r["best_khat"]) for r in rows
+             if str(r.get("best_khat", "")) not in ("", "nan") and np.isfinite(float(r["best_khat"]))]
+    n_k = len(khats)
+    lines.append(("best_khat_n", n_k))
+    if n_k:
+        arr = np.array(khats)
+        lines.append(("best_khat_mean", float(arr.mean())))
+        lines.append(("best_khat_frac_le_0.5", float(np.mean(arr <= 0.5))))
+        lines.append(("best_khat_frac_le_0.7", float(np.mean(arr <= 0.7))))
+        lines.append(("best_khat_frac_gt_0.7", float(np.mean(arr > 0.7))))
     with _open(stats_path, "wt") as fh:
         fh.write("metric\tvalue\n")
         for k, v in lines:

@@ -15,7 +15,9 @@
  *   Step 6  TRANS_FEATURES      -- collect each gene's upstream regulators' pruned cis SNPs
  *                                 (the trans channel) by walking the network per tissue.
  *   Step 7  FIT_EXPRESSION_MODELS -- fit channel-aware Bayesian expression models (cis /
- *                                 trans / cis+trans) per gene, per tissue.
+ *                                 trans / cis+trans) per gene, per tissue. Scored by
+ *                                 whole-cohort PSIS-LOO, or (when --train_fraction < 1, via
+ *                                 SPLIT_SAMPLES) on a held-out test fold.
  *   Step 8  HARMONISE_GWAS      -- align a GWAS to the ALT allele (optional; per trait).
  *   Step 9  TWAS_ASSOCIATION    -- summary-statistic TWAS with a cis/trans split (optional;
  *                                 per tissue and trait).
@@ -40,6 +42,7 @@ include { RECONSTRUCT_GRN    } from './modules/local/reconstruct_grn.nf'
 include { SELECT_CIS_FEATURES } from './modules/local/select_cis_features.nf'
 include { LD_PRUNE           } from './modules/local/ld_prune.nf'
 include { TRANS_FEATURES     } from './modules/local/trans_features.nf'
+include { SPLIT_SAMPLES      } from './modules/local/split_samples.nf'
 include { FIT_EXPRESSION_MODELS } from './modules/local/fit_expression_models.nf'
 include { HARMONISE_GWAS     } from './modules/local/harmonise_gwas.nf'
 include { TWAS_ASSOCIATION   } from './modules/local/twas_association.nf'
@@ -78,10 +81,23 @@ workflow {
     TRANS_FEATURES(tf_in)
 
     // expression models: predict each gene from its cis SNPs and its regulators' cis SNPs.
-    fit_in = HARMONISE_INPUTS.out.aligned.map { t, x, g, e -> tuple(t, x) }
+    base_fit = HARMONISE_INPUTS.out.aligned.map { t, x, g, e -> tuple(t, x) }
         .join(LD_PRUNE.out.pruned)                       // t, expr, cis_pruned, geno012
         .join(TRANS_FEATURES.out.trans_features)         // t, expr, cis_pruned, geno012, trans
         .map { t, expr, cis_pruned, geno012, trans -> tuple(t, expr, geno012, cis_pruned, trans) }
+
+    // Optional held-out split. With train_fraction < 1, fit on the train fold and score the
+    // predictors out-of-sample on the test fold; otherwise pass NO_FILE placeholders so the whole
+    // cohort is scored by PSIS leave-one-out (the default for small cohorts).
+    if( (params.train_fraction as double) < 1 ) {
+        SPLIT_SAMPLES(LD_PRUNE.out.pruned.map { t, cis_pruned, geno012 -> tuple(t, geno012) })
+        fit_in = base_fit.join(SPLIT_SAMPLES.out.splits)   // t, expr, geno012, cis, trans, train, test
+    } else {
+        no_train = file("${projectDir}/assets/NO_TRAIN")
+        no_test  = file("${projectDir}/assets/NO_TEST")
+        fit_in = base_fit.map { t, expr, geno012, cis, trans ->
+                                tuple(t, expr, geno012, cis, trans, no_train, no_test) }
+    }
     FIT_EXPRESSION_MODELS(fit_in)
 
     // association against GWAS traits (optional; runs only when --gwas-samplesheet is given).
