@@ -11,8 +11,9 @@ import importlib.util
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas")
 
 _SPEC = importlib.util.spec_from_file_location(
     "run_findr_py", Path(__file__).resolve().parents[1] / "bin" / "run_findr_py.py")
