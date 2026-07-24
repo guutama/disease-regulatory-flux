@@ -88,15 +88,15 @@ frames = []
 for t in TISSUES:
     df = pd.read_csv(f"{MODELS}/{t}.expr_model_metrics.tsv.gz", sep="\t")
     df["tissue"] = t
-    # --- schema bridge: new fit_expression_models output lacks delta_elpd ---
+    # ELPD gain of the cis+trans model over the cis-only model, per gene.
     df["delta_elpd"] = df["elpd_cistrans"] - df["elpd_cis"]
-    # --- schema bridge: inject stats keys the new stats file does not carry ---
-    # channel fit-counts (genes with a model fit in that channel) used by the
-    # pooled-table weighted means; equal to the class counts in the new stats.
+    # Genes with a model fit in each channel: a gene has a cis fit if it is
+    # cis-only or both, a trans fit if it is trans-only or both, and a cis+trans
+    # fit if it is both.
     S[t]["n_fit_cis"] = S[t]["n_cis_only"] + S[t]["n_both"]
     S[t]["n_fit_trans"] = S[t]["n_trans_only"] + S[t]["n_both"]
     S[t]["n_fit_cistrans"] = S[t]["n_both"]
-    # mean best_loo_r2 over predictable genes (selected-model performance)
+    # Mean leave-one-out R^2 of the selected model over the predictable genes.
     S[t]["loo_r2_selected_predictable_mean"] = (
         df.loc[df["predictable"] == True, "best_loo_r2"].mean())
     frames.append(df)
@@ -134,13 +134,13 @@ def pooled(metric):
 # ---- (a) pooled funnel
 g_all = pooled("n_genes")
 g_pred = pooled("n_predictable")
-g_to = pooled("n_trans_only")
-g_to_pred = pooled("n_predictable_trans_only")
-labels = ["Genes modeled",
-          f"Predictable\n({100*g_pred/g_all:.0f}% of modeled)",
-          f"Trans-only genes\n({100*g_to/g_all:.0f}%, no cis)",
-          f"predictable via trans\n({100*g_to_pred/g_to:.0f}% of trans-only)"]
-vals = [g_all, g_pred, g_to, g_to_pred]
+g_use = int(P["best_config"].isin(["cis_trans", "trans_only"]).sum())   # predictable, selected predictor uses trans
+g_to = int((P["gene_class"] == "trans_only").sum())                     # predictable & no cis eQTL (== n_predictable_trans_only; matches panel d)
+labels = ["Genes modelled",
+          f"Predictable\n({100*g_pred/g_all:.0f}% of modelled)",
+          f"Predictor uses trans\n({100*g_use/g_pred:.0f}% of predictable)",
+          f"Predictor is trans-only\n({100*g_to/g_use:.0f}% of trans-using)"]
+vals = [g_all, g_pred, g_use, g_to]
 y = np.arange(len(vals))[::-1]
 axA.barh(y, vals, color="#9E9E9E", height=0.60)
 for yi, v in zip(y, vals):
