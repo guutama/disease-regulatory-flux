@@ -34,17 +34,31 @@ Inputs
   --gwas            <trait>.gwas.tsv.gz (Step 8): ALT-aligned z
   --tissue --trait  labels    --outdir    [--fdr 0.05]
 
-Output: <outdir>/flux_<tissue>_<trait>.tsv, one row per edge
-  source_gene  target_gene  disease_gene  hop  n_snp  flux  sign  tissue  trait
+Output: <outdir>/flux_<tissue>_<trait>.csv, one row per regulator->disease-gene attribution
+  regulator  regulator_gene_id  target  target_gene_id  tissue  hop  flux
+Each contributing ancestor is attributed DIRECTLY to the disease gene it feeds: hop=1 if it is a
+direct GRN parent, hop=2 if it is a grandparent (its hop-2 shares summed back to the disease gene).
+An ancestor that is both a parent and a grandparent of the same gene is kept once at hop=1, so the
+fluxes into a target still sum to z_trans(g). regulator/target are HGNC symbols; the *_gene_id
+columns carry the (versioned Ensembl) identifiers. This is the manuscript Supplementary Table S4
+column layout.
 """
 from __future__ import annotations
 
 import argparse
 import gzip
 import os
+import sys
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "utils"))
+import gene_labels as gl  # noqa: E402
+
+DEFAULT_ANNOT = ("/cluster/projects/nn1015k/datasets/references/gencode/GRCh37/"
+                 "gencode.v19.genes.tsv")
 
 
 def _open(path, mode="rt"):
@@ -219,6 +233,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--gene-col", default="gene_id", help="gene-id column (default: gene_id)")
     p.add_argument("--variant-col", default="variant_id",
                    help="variant-id column (default: variant_id)")
+    p.add_argument("--gene-annot", default=os.environ.get("GENE_ANNOT", DEFAULT_ANNOT),
+                   help="GENCODE gene table for HGNC symbols (gene_id, gene_name)")
     a = p.parse_args(argv)
     if a.delimiter == "\\t":
         a.delimiter = "\t"
@@ -245,41 +261,42 @@ def main(argv=None) -> None:
     sd = load_genotype_sd(args.genotype, d, args.variant_col, wanted)
     gwas_z = load_gwas_z(args.gwas, d, args.variant_col)
 
+    label_map = gl.load_label_map(gl.default_annot(args.gene_annot), "gene_id", "gene_name")
+
+    # One row per contributing ancestor -> disease-gene attribution, in the Supplementary Table S4
+    # column layout. Each ancestor is attributed DIRECTLY to the disease gene: hop=1 if it is a
+    # direct GRN parent of the gene, hop=2 otherwise (a grandparent, its hop-2 shares summed back
+    # to the gene by gene_flux). An ancestor that is both a parent and a grandparent of the same
+    # gene is emitted once at hop=1, so sum_A flux(A -> gene) == z_trans(gene).
     edges = []
+    diseases = set()
     for gene, (sigma_g, _z_trans) in sig.items():
         rows = per_gene.get(gene)
         if not rows or sigma_g == 0.0:
             continue
         flux = gene_flux(rows, trans_w.get(gene, {}), sd, gwas_z, sigma_g)
         g_parents = parents.get(gene, set())
-        # hop-1: each parent -> the disease gene
-        for P in g_parents:
-            fl, n_snp = flux.get(P, [0.0, 0])
-            f_str, sign = _fmt(fl, n_snp)
-            edges.append([P, gene, gene, "1", str(n_snp), f_str, sign])
-        # hop-2: each grandparent -> the intermediate parent(s) it reaches the gene through
-        grandparents = {A for _hop, A, _s in rows if _hop == "2"}
-        for GP in grandparents:
-            fl, n_snp = flux.get(GP, [0.0, 0])
-            intermediates = [P for P in g_parents if GP in parents.get(P, set())]
-            if not intermediates:
-                intermediates = [gene]      # fall back to a direct edge if no path is found
-            share = fl / len(intermediates)
-            for P in intermediates:
-                f_str, sign = _fmt(share, n_snp)
-                edges.append([GP, P, gene, "2", str(n_snp), f_str, sign])
+        for A, (fl, n_snp) in flux.items():
+            if n_snp == 0:                      # no weighted, GWAS-matched SNP -> no flux delivered
+                continue
+            hop = 1 if A in g_parents else 2
+            edges.append([gl.resolve(A, label_map), A,
+                          gl.resolve(gene, label_map), gene,
+                          args.tissue, str(hop), repr(float(fl))])
+            diseases.add(gene)
 
     os.makedirs(args.outdir, exist_ok=True)
-    out = os.path.join(args.outdir, f"flux_{args.tissue}_{args.trait}.tsv")
+    out = os.path.join(args.outdir, f"flux_{args.tissue}_{args.trait}.csv")
+    header = ["regulator", "regulator_gene_id", "target", "target_gene_id", "tissue", "hop", "flux"]
     with open(out, "wt") as fh:
-        fh.write("\t".join(["source_gene", "target_gene", "disease_gene", "hop", "n_snp",
-                            "flux", "sign", "tissue", "trait"]) + "\n")
+        fh.write(",".join(header) + "\n")
         for e in edges:
-            fh.write("\t".join(e + [args.tissue, args.trait]) + "\n")
+            fh.write(",".join(e) + "\n")
 
-    diseases = {e[2] for e in edges}
+    n1 = sum(1 for e in edges if e[5] == "1")
+    n2 = len(edges) - n1
     print(f"[build_flux_map] tissue={args.tissue} trait={args.trait} "
-          f"disease_genes={len(diseases)} edges={len(edges)}")
+          f"disease_genes={len(diseases)} edges={len(edges)} (hop1={n1} hop2={n2}) -> {out}")
 
 
 if __name__ == "__main__":
