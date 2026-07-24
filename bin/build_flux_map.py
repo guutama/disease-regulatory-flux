@@ -261,7 +261,10 @@ def main(argv=None) -> None:
     sd = load_genotype_sd(args.genotype, d, args.variant_col, wanted)
     gwas_z = load_gwas_z(args.gwas, d, args.variant_col)
 
-    label_map = gl.load_label_map(gl.default_annot(args.gene_annot), "gene_id", "gene_name")
+    # HGNC symbols are a convenience for the regulator/target columns; when no gene annotation
+    # is available the symbol columns fall back to the gene IDs (gl.resolve returns the id).
+    label_map = (gl.load_label_map(args.gene_annot, "gene_id", "gene_name")
+                 if args.gene_annot and os.path.exists(args.gene_annot) else {})
 
     # One row per contributing ancestor -> disease-gene attribution, in the Supplementary Table S4
     # column layout. Each ancestor is attributed DIRECTLY to the disease gene: hop=1 if it is a

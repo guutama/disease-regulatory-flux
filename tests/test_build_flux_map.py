@@ -1,15 +1,15 @@
 """Unit tests for bin/build_flux_map.py (Step 10: disease-regulatory flux map).
 
-The flux map is a path-preserving network. Its nodes are the disease genes (significant in
-the association) plus their hop-1 GRN parents and hop-2 grandparents; its edges are the true
-single-hop GRN edges along the paths down to a disease gene: parent -> disease_gene (hop 1)
-and grandparent -> intermediate_parent (hop 2). Each edge carries the signed flux its source
-regulator delivers to the disease gene, flux(A -> g); a grandparent reaching g through several
-parents splits evenly across those edges, so the fluxes still sum to z_trans(g). Every parent
-and grandparent appears even when it delivers no flux (blank `flux`). We test:
-  * a contributing parent edge (parent -> disease gene),
-  * a grandparent edge whose target is the intermediate parent (the child gene is added),
-  * that a non-contributing ancestor is kept with a blank flux,
+The flux map attributes each disease gene's trans signal to its upstream regulators. Every
+contributing ancestor is attributed DIRECTLY to the disease gene it feeds -- a hop-1 GRN parent
+(hop=1) or a hop-2 grandparent (hop=2) -- so the per-regulator fluxes into a gene sum to
+z_trans(g). An ancestor that delivers no weighted, GWAS-matched SNP is omitted. The output is one
+CSV row per regulator->disease-gene attribution:
+  regulator, regulator_gene_id, target, target_gene_id, tissue, hop, flux
+We test:
+  * a contributing parent edge (parent -> disease gene, hop 1),
+  * a grandparent attributed directly to the disease gene (hop 2),
+  * that a non-contributing ancestor is omitted,
   * the exact recovery sum_A flux(A -> g) = z_trans(g),
   * that only significant genes are decomposed.
 """
@@ -91,45 +91,43 @@ def run(d: Path):
              "--trans-features", str(d / "trans.tsv.gz"), "--genotype", str(d / "geno.tsv.gz"),
              "--gwas", str(d / "gwas.tsv.gz"), "--tissue", "T", "--trait", "CADtest",
              "--outdir", str(d)])
-    out = d / "flux_T_CADtest.tsv"
-    rows = [ln.split("\t") for ln in out.read_text().splitlines()]
+    out = d / "flux_T_CADtest.csv"
+    rows = [ln.split(",") for ln in out.read_text().splitlines()]
     header = rows[0]
     return [dict(zip(header, r)) for r in rows[1:]]
 
 
 def _by_edge(rows):
-    return {(r["source_gene"], r["target_gene"]): r for r in rows}
+    return {(r["regulator"], r["target"]): r for r in rows}
 
 
 def test_parent_edge_flux(tmp_path):
     e = _by_edge(run(tmp_path))
     p1 = e[("P1", "geneG")]            # parent -> disease gene
-    assert p1["hop"] == "1" and p1["disease_gene"] == "geneG"
+    assert p1["hop"] == "1" and p1["target_gene_id"] == "geneG"
     assert float(p1["flux"]) == pytest.approx(T1)
 
 
-def test_grandparent_edge_targets_intermediate(tmp_path):
+def test_grandparent_attributed_directly(tmp_path):
     e = _by_edge(run(tmp_path))
-    # the grandparent edge points at the intermediate parent P1, not at geneG
-    gp = e[("GP", "P1")]
-    assert gp["hop"] == "2" and gp["disease_gene"] == "geneG"
+    # the grandparent is attributed directly to the disease gene at hop 2
+    gp = e[("GP", "geneG")]
+    assert gp["hop"] == "2"
     assert float(gp["flux"]) == pytest.approx(T3)
-    assert ("GP", "geneG") not in e        # no collapsed grandparent -> disease shortcut
+    assert ("GP", "P1") not in e           # not routed through the intermediate parent
 
 
-def test_noncontributing_ancestor_blank_flux(tmp_path):
+def test_noncontributing_ancestor_omitted(tmp_path):
     e = _by_edge(run(tmp_path))
-    p2 = e[("P2", "geneG")]            # P2 is a parent but delivers no weighted SNP
-    assert p2["flux"] == ""            # kept as a structural edge, flux blank
+    assert ("P2", "geneG") not in e        # P2 delivers no weighted SNP, so no edge
 
 
 def test_flux_recovers_z_trans(tmp_path):
     rows = run(tmp_path)
-    total = sum(float(r["flux"]) for r in rows
-                if r["disease_gene"] == "geneG" and r["flux"] != "")
+    total = sum(float(r["flux"]) for r in rows if r["target"] == "geneG")
     assert total == pytest.approx(Z_TRANS)
 
 
 def test_only_significant_genes_decomposed(tmp_path):
-    diseases = {r["disease_gene"] for r in run(tmp_path)}
-    assert diseases == {"geneG"}       # geneN (p_adj = 0.4) is not a disease gene
+    targets = {r["target"] for r in run(tmp_path)}
+    assert targets == {"geneG"}        # geneN (p_adj = 0.4) is not a disease gene
