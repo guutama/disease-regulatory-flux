@@ -14,9 +14,11 @@ are added.
 
 ## Inputs
 
-The pipeline runs **per tissue** and needs three matched reference files. All are
-tab-separated tables and may be gzipped (`.gz`). Column names and the delimiter are
-configurable; the defaults are shown below.
+To run end to end — from reference data to the disease-regulatory flux map — the pipeline needs
+**four** inputs: three matched **per-tissue** reference files (expression, genotype and cis-eQTL),
+and one or more **GWAS summary-statistics** files for the trait(s) of interest. All are
+tab-separated tables and may be gzipped (`.gz`). Column names and the delimiter are configurable;
+the defaults are shown below.
 
 ### 1. Expression matrix — `expression.tsv[.gz]`
 
@@ -61,6 +63,23 @@ ENSG0001    rs1002   -0.12    0.05    3.0e-3
 ENSG0002    rs1002    0.27    0.06    8.0e-6
 ```
 
+### 4. GWAS summary statistics — `gwas.tsv[.gz]`
+
+Genome-wide association summary statistics for the trait — one row per variant, with the effect
+allele, the other allele, effect size, standard error and p-value. This is the disease signal the
+pipeline carries through the network to build the flux map. Unlike the three files above it is
+**not** per tissue: provide **one file per trait**, and the same GWAS is used across all tissues.
+
+```
+chromosome  position  effect_allele  other_allele  beta     se      pvalue    n
+1           1001       G              A             0.031    0.006   2.0e-7    500000
+1           1002       T              C            -0.012    0.005   3.0e-3    500000
+```
+
+Variants are matched to the pipeline by `chromosome` and `position` and re-aligned to the
+genotype's alternate allele (Step 8). The column names default to the GWAS-Catalog harmonised
+layout and can be overridden per cohort.
+
 ### Variant identifiers
 
 The genotype and eQTL files must identify variants the **same way**:
@@ -80,6 +99,7 @@ GWAS-harmonisation step can align each variant to its alternate allele.
 | sample columns | expression ↔ genotype |
 | `gene_id`      | expression ↔ eQTL |
 | variant id     | genotype ↔ eQTL |
+| `chromosome`, `position` | genotype ↔ GWAS |
 
 ---
 
@@ -108,15 +128,32 @@ Add one row for every tissue you want to run. Paths may be absolute or relative 
 you launch the pipeline. The input files themselves are the `.tsv[.gz]` tables described in
 *Inputs* above — the samplesheet only points to them.
 
-Then run:
+You also provide a **GWAS samplesheet** — a second CSV with a header and one row per trait,
+naming each trait's summary-statistics file:
 
 ```
-nextflow run flux.nf --samplesheet samplesheet.csv --outdir results
+trait,gwas
+CAD,/data/cad_gwas.tsv.gz
 ```
 
-Outputs are written per tissue under `results/harmonised/`. The column names and field
-delimiter are set in `nextflow.config` (or overridden with `--<param>`), so a new dataset
-needs no code changes.
+| column | what to put in it |
+|--------|-------------------|
+| `trait` | a short label for the trait (your choice); used to name that trait's outputs |
+| `gwas` | path to the trait's GWAS summary-statistics file (the file described above) |
+
+Then run the whole pipeline end to end:
+
+```
+nextflow run flux.nf \
+    --samplesheet samplesheet.csv \
+    --gwas_samplesheet gwas.csv \
+    --outdir results
+```
+
+This produces the disease-regulatory flux map per tissue and trait under `results/flux/`. The
+column names and field delimiter are set in `nextflow.config` (or overridden with `--<param>`), so
+a new dataset needs no code changes. Omitting `--gwas_samplesheet` runs only the expression-model
+half of the pipeline and stops after Step 7 (no association or flux map).
 
 ---
 
@@ -244,10 +281,34 @@ The seventh stage fits a channel-aware Bayesian expression model for every gene
 channels --- its own cis SNPs (the cis channel) and its upstream regulators' cis SNPs (the
 trans channel) --- and the model is fit in up to three configurations: `cis_only`,
 `trans_only` and `cis_trans`. A gene with both channels is fit in all three; a gene with one
-channel is fit in that one. Each configuration is fit by MCMC (NumPyro) and scored by PSIS
-leave-one-out cross-validation (ArviZ); the configuration with the highest expected log
-predictive density (elpd) is selected, and the gene is **predictable** when the selected
-model's leave-one-out R² reaches the threshold (`0.01`).
+channel is fit in that one. Each configuration is fit by MCMC (NumPyro); the configuration with
+the highest expected log predictive density (elpd) is selected, and the gene is **predictable**
+when the selected model's leave-one-out R² reaches the threshold (`0.01`).
+
+### How predictors are scored: whole-cohort vs held-out (`train_fraction`)
+
+How a configuration is scored is controlled by `train_fraction` in `nextflow.config` (or
+`--train_fraction` on the command line):
+
+- **`train_fraction = 1` (default)** — the whole cohort is used for both fitting and scoring, and
+  each configuration is scored by PSIS leave-one-out cross-validation (ArviZ). This is the right
+  choice for small reference cohorts (a few hundred samples), where a held-out fold would be too
+  small to estimate a per-gene R² without dominating noise.
+- **`train_fraction < 1`** — an extra step (`SPLIT_SAMPLES`) partitions each tissue's samples into
+  a train and a test fold (reproducibly, seeded by `split_seed`). The model is then fit on the
+  train fold and scored **out-of-sample** on the held-out test fold: the reported `loo_r2` and
+  `elpd` columns become the genuine held-out test-set R² and log predictive density, and the
+  written weights are the train-only fit. Use this to check that the predictive accuracy is not
+  inflated by fitting and scoring on the same samples. For example, an 80/20 split:
+
+  ```
+  nextflow run flux.nf --samplesheet samplesheet.csv --outdir results \
+      --train_fraction 0.8 --split_seed 1
+  ```
+
+  The per-tissue folds are published under `results/splits/` (`<tissue>.train.samples`,
+  `<tissue>.test.samples`), and each tissue's `expr_model_stats.tsv` records `eval_mode`
+  (`loo` or `heldout_test`) with the `n_train`/`n_test` counts used.
 
 The prior is set by `expr_model` in `nextflow.config`:
 
@@ -294,15 +355,10 @@ The GWAS column names default to the GWAS-Catalog harmonised layout (`chromosome
 `effect_allele`, `other_allele`, `beta`, `se`, `pvalue`, `n`) and can be overridden per cohort.
 This step uses only the Python standard library.
 
-Steps 8 and 9 are **optional**: they run only when a GWAS samplesheet is given. It is a small
-CSV with a header and one row per trait, naming each trait's raw summary-statistics file:
-
-```
-trait,gwas
-CAD,/data/cad_gwas.tsv.gz
-```
-
-Pass it with `--gwas-samplesheet gwas.csv`; without it the pipeline stops after Step 7.
+This step reads the **GWAS samplesheet** described in *Inputs* and *Running the pipeline*
+(`--gwas_samplesheet`). Steps 8–10 are the trait-facing half of the pipeline that turns the GWAS
+into the disease-regulatory flux map; when no GWAS samplesheet is given the run stops after Step 7
+(expression models only).
 
 ---
 
