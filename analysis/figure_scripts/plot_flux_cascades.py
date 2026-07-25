@@ -9,7 +9,7 @@ gene. The displayed gene-tissue cases are the most convergent (coherence > 0.7 a
 regulators), ranked by convergence x number of regulators and pooled across tissues.
 
 Inputs (per tissue; tissues discovered from --flux-dir unless --tissues is given):
-  --flux-dir    flux_<tissue>_<trait>.csv          S4 flux edges (regulator,...,target,...,hop,flux)
+  --flux-dir    flux_<tissue>_<trait>.csv          flux edges (regulator,...,target,...,hop,flux)
   --assoc-dir   association_<tissue>_<trait>.tsv    z_trans / z_twas / p_adj per gene
   --feat-dir    <tissue>.trans_features.tsv.gz      hop of each (gene, ancestor)
   --dag-dir     dag_<tissue>_<dag-tag>.csv          the GRN DAG (Source, Target) for parent links
@@ -30,7 +30,7 @@ import argparse, glob
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "utils")); import gene_labels as gl
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-ap.add_argument("--flux-dir", required=True, help="dir with flux_<tissue>_<trait>.csv (S4 flux edges)")
+ap.add_argument("--flux-dir", required=True, help="dir with flux_<tissue>_<trait>.csv (flux edges)")
 ap.add_argument("--assoc-dir", required=True, help="dir with association_<tissue>_<trait>.tsv")
 ap.add_argument("--feat-dir", required=True, help="dir with <tissue>.trans_features.tsv.gz")
 ap.add_argument("--dag-dir", required=True, help="dir with the GRN DAG csv (dag_<tissue>_<dag-tag>.csv)")
@@ -42,7 +42,7 @@ ap.add_argument("--tissues", nargs="+", default=None, help="tissue labels; defau
 args = ap.parse_args()
 
 TRAIT = args.trait
-FL = args.flux_dir              # flux_<t>_<trait>.csv (S4 columns)
+FL = args.flux_dir              # flux_<t>_<trait>.csv (regulator, target, hop, flux)
 AT = args.assoc_dir            # association_<t>_<trait>.tsv
 NET = args.dag_dir             # dag_<t>_<dag-tag>.csv
 FEAT = args.feat_dir           # <t>.trans_features.tsv.gz
@@ -64,7 +64,7 @@ plt.rcParams.update({"font.family": "sans-serif", "font.sans-serif": ["Arial", "
 
 
 def read_flux(t):
-    """S4-style flux CSV -> the figure's edge frame in Ensembl-id space with abs_flux.
+    """Flux CSV -> the figure's edge frame in Ensembl-id space with abs_flux.
 
     The figure operates on Ensembl ids (association/trans-features/DAG are all Ensembl), so the
     *_gene_id columns become `regulator`/`target`; the symbol columns are dropped."""

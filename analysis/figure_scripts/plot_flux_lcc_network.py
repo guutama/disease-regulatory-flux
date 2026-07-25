@@ -51,9 +51,9 @@ LEGEND = """
  <div style="font-size:15px;font-weight:bold;margin-bottom:4px;">LABEL flux network</div>
  <div style="color:#666;margin-bottom:6px;">largest connected component: NDG disease genes, NE edges &middot; labels end with chromosome</div>
  <span style="color:#6a51a3;font-size:22px;vertical-align:middle;">&#9679;</span> disease gene (size ~ |Z<sub>trans</sub>|; shows chr, Z<sub>cis</sub>/Z<sub>trans</sub>)<br>
- <span style="color:#0d9488;font-size:17px;vertical-align:middle;">&#9679;</span> key driver: non-significant regulator feeding &ge;10 disease genes (size ~ # targets)<br>
- <span style="color:#9ecae1;font-size:14px;vertical-align:middle;">&#9679;</span> private regulator (feeds &lt;10 disease genes)<br>
- <span style="display:inline-block;width:13px;height:13px;border:3px solid #e8a000;border-radius:50%;vertical-align:middle;"></span> core master regulator: significant gene feeding &ge;10 disease genes<br>
+ <span style="color:#0d9488;font-size:17px;vertical-align:middle;">&#9679;</span> key driver: non-significant regulator feeding &ge;MINTGT disease genes (size ~ # targets)<br>
+ <span style="color:#9ecae1;font-size:14px;vertical-align:middle;">&#9679;</span> private regulator (feeds &lt;MINTGT disease genes)<br>
+ <span style="display:inline-block;width:13px;height:13px;border:3px solid #e8a000;border-radius:50%;vertical-align:middle;"></span> core master regulator: significant gene feeding &ge;MINTGT disease genes<br>
  <span style="color:#c1121f;font-weight:bold;">&#8212;&#8212;</span> flux toward risk &nbsp;
  <span style="color:#2c6fbb;font-weight:bold;">&#8212;&#8212;</span> flux away from risk &nbsp;(number on edge = flux)<br>
  <span style="color:#555;font-weight:bold;">- - -</span> dashed = regulator on <b>same chromosome</b> as target (distance in Mb shown; small = possible co-expression/cis)
@@ -157,7 +157,8 @@ def build(key, flux_dir, trait, out_dir, S, chrom, mid, min_targets):
     ndg = sum(1 for n in G if is_dg(n))
     label = f"{TISSUE_NAME.get(key, key)} ({key})"
     legend = (LEGEND.replace("LABEL", label).replace("NDG", str(ndg))
-              .replace("NE", str(G.number_of_edges())).replace("SHORT", key))
+              .replace("NE", str(G.number_of_edges())).replace("SHORT", key)
+              .replace("MINTGT", str(min_targets)))
     out = f"{out_dir}/fig_flux_lcc_{key}.html"
     net.write_html(out, notebook=False)
     Path(out).write_text(Path(out).read_text().replace("<body>", "<body>\n" + legend, 1))

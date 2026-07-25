@@ -10,14 +10,13 @@ comparison is not confounded by different gene sets. Both use equal-size random 
 Panel (b): network density (mean regulator out-degree, from the reconstructed DAG) against the
 common-gene background co-expression, with the across-tissue Pearson correlation.
 
-The two adipose depots (SF, VAF) are highlighted, as both their networks and their background
-co-expression are the highest.
+The two adipose depots (SF, VAF) are highlighted.
 
 Inputs: the reconstructed per-tissue DAG edge lists under RESULTS (network density) and the
 per-tissue expression matrices under --expr-dir (only aggregate co-expression is reported, never
 individual values). Output: fig_coexpression_density.{pdf,png} in the shared figures directory.
 
-Network inputs resolve under RESULTS (default results_cv/, override with FLUX_RESULTS); figures go
+Network inputs resolve under RESULTS (default results_findr_py/, override with FLUX_RESULTS); figures go
 to results/figures/ by default (override with FLUX_FIGURES). Style: Arial, 300 DPI.
 
 Usage:
@@ -45,8 +44,8 @@ plt.rcParams.update({
 
 C_OWN, C_COMMON, C_ADIPOSE, C_OTHER = "#B0B7C0", "#4C72B0", "#C0392B", "#4C72B0"
 ADIPOSE = {"SF", "VAF"}
-# Input result locations resolve under RESULTS (default results_cv/, override with FLUX_RESULTS).
-RESULTS = Path(os.environ.get("FLUX_RESULTS", Path(__file__).resolve().parents[2] / "results_cv"))
+# Input result locations resolve under RESULTS (default results_findr_py/, override with FLUX_RESULTS).
+RESULTS = Path(os.environ.get("FLUX_RESULTS", Path(__file__).resolve().parents[2] / "results_findr_py"))
 # All figures go to one shared directory: results/figures/ by default (override with FLUX_FIGURES).
 FIGDIR = Path(os.environ.get("FLUX_FIGURES", Path(__file__).resolve().parents[2] / "results" / "figures"))
 

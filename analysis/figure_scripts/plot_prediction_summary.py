@@ -121,11 +121,11 @@ P = M[M["predictable"] == True].copy()            # predictable genes only
 # ============================================================ figure
 fig = plt.figure(figsize=(13.5, 8.4))
 gs = fig.add_gridspec(2, 6, hspace=0.42, wspace=1.1)
-axA = fig.add_subplot(gs[0, 0:2])   # (a) pooled funnel
-axB = fig.add_subplot(gs[0, 2:4])   # (b) per-tissue composition
-axC = fig.add_subplot(gs[0, 4:6])   # (c) trans-only predictable: LOO-R2 vs # regulator genes
-axD = fig.add_subplot(gs[1, 0:3])   # (d) cis vs cis+trans LOO-R2 (does trans add)
-axE = fig.add_subplot(gs[1, 3:6])   # (e) delta-ELPD model-evidence histogram
+axA = fig.add_subplot(gs[0, 0:2])   # (a) genome-wide gene predictability
+axB = fig.add_subplot(gs[0, 2:4])   # (b) selected predictor per tissue
+axC = fig.add_subplot(gs[0, 4:6])   # (c) model evidence for trans (delta-ELPD)
+axD = fig.add_subplot(gs[1, 0:3])   # (d) trans-only predictable genes
+axE = fig.add_subplot(gs[1, 3:6])   # (e) who gains from trans
 
 
 def pooled(metric):

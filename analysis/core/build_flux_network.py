@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build one tissue's disease-regulatory flux network (node roles + flux edges).
 
-Consumes the paper-exact flux edges written by bin/build_flux_map.py
+Consumes the flux edges written by bin/build_flux_map.py
 (flux_<tissue>_<trait>.csv: regulator -> disease-gene attribution flux, with
 sum_A flux(A -> G) = z_trans(G) exactly), so this network and the flux-edge
 supplementary table are computed from one and the same flux. Nodes are all
@@ -77,7 +77,7 @@ def main():
     ap.add_argument("--tissue", required=True)
     ap.add_argument("--trait", required=True)
     ap.add_argument("--flux", required=True,
-                    help="flux_<t>_<trait>.csv from bin/build_flux_map.py (the paper-exact edges)")
+                    help="flux_<t>_<trait>.csv from bin/build_flux_map.py")
     ap.add_argument("--assoc", required=True, help="association_<t>_<trait>.tsv")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--core-k", default="median", help="'median' or an integer in-degree floor")
@@ -97,7 +97,7 @@ def main():
         meta["win_config"] = meta["config"]
     sig = set(meta.index[meta["p_adj"] < FDR])
 
-    # paper-exact flux edges (regulator -> disease gene), keyed on Ensembl gene ids
+    # flux edges (regulator -> disease gene), keyed on Ensembl gene ids
     fx = pd.read_csv(args.flux)
     E = pd.DataFrame({
         "tissue": t,

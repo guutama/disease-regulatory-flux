@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "utils"))
 import gene_labels as gl
 
@@ -37,7 +37,9 @@ TIS = ["AOR", "Blood", "LIV", "MAM", "SF", "SKLM", "VAF"]
 TRAIT = "CAD_aragam2022"
 GS = str(ROOT / "data" / "genesets")
 OUTD = str(RF / "functional")
-MAPF = "/cluster/projects/nn1015k/datasets/references/gencode/GRCh37/gencode.v19.genes.tsv"
+MAPF = os.environ.get(
+    "GENE_ANNOT",
+    "/cluster/projects/nn1015k/datasets/references/gencode/GRCh37/gencode.v19.genes.tsv")
 base = lambda g: str(g).split(".")[0]
 MAP = gl.load_label_map(MAPF)
 sym = lambda g: gl.resolve(g, MAP)
@@ -48,7 +50,7 @@ CV = re.compile(
     r"lipid|lipoprotein|cholesterol|choleste|triglycer|sterol|foam cell|"
     r"coronary|ischemi|infarct|elastic fiber|extracellular matrix", re.I)
 
-# Five downloaded Enrichr libraries (CORUM is not used); readable library label -> filename.
+# Five downloaded Enrichr libraries; readable library label -> filename.
 GMT = [("MGI", "MGI_Mammalian_Phenotype_Level_4_2021.gmt"),
        ("GO-BP", "GO_Biological_Process_2023.gmt"),
        ("Reactome", "Reactome_2022.gmt"),

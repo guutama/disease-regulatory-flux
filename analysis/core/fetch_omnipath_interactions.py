@@ -40,7 +40,7 @@ import pandas as pd
 DATASETS = ["omnipath", "pathwayextra", "kinaseextra", "ligrecextra", "collectri", "dorothea"]
 DOROTHEA_LEVELS = ["A", "B", "C"]
 
-# Columns kept, in the historical order the validators expect.
+# Columns kept, in fixed order.
 COLUMNS = ["source", "target", "source_genesymbol", "target_genesymbol",
            "is_directed", "is_stimulation", "is_inhibition",
            "consensus_direction", "consensus_stimulation", "consensus_inhibition",

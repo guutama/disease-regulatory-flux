@@ -9,7 +9,8 @@
  * Emits per (tissue, trait):
  *   association_<tissue>_<trait>.tsv   one row per gene: z_twas, z_cis, z_trans, p, p_adj, ...
  *
- * Required params (see nextflow.config): input_delimiter, gene_col.
+ * Required params (see nextflow.config): input_delimiter, gene_col, sigma_g_floor,
+ * trans_sigma_floor.
  */
 process TWAS_ASSOCIATION {
     tag "${tissue}:${trait}"
@@ -36,6 +37,8 @@ process TWAS_ASSOCIATION {
         --trait      ${trait} \\
         --outdir     . \\
         --delimiter  '${params.input_delimiter}' \\
-        --gene-col   '${params.gene_col}'
+        --gene-col   '${params.gene_col}' \\
+        --sigma-g-floor     ${params.sigma_g_floor} \\
+        --trans-sigma-floor ${params.trans_sigma_floor}
     """
 }

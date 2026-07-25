@@ -139,7 +139,7 @@ for c in order:                                                # significant, by
                 alpha=0.8, linewidths=0)
 axC.axhline(zcut, ls=":", lw=0.9, color="#c0392b")
 r = np.corrcoef(az, 1.0 / A["sigma_g"].values)[0, 1]
-st = A[(A["p_adj"] < 0.05) & (A["n_trans"] > 0)]               # significant trans-using genes
+st = A[(A["p_adj"] < 0.05) & (A["n_trans"] > 0) & (A["sigma_g"] > 0.2)]   # significant trans-using genes above the trans sigma_g floor
 rt = np.corrcoef(st["z_trans"].abs(), 1.0 / st["sigma_g"])[0, 1]
 axC.text(0.96, 0.96,
          f"$r(|Z_{{\\mathrm{{twas}}}}|,\\,1/\\sigma_g)={r:.2f}$\n"
