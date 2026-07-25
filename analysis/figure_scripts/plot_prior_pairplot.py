@@ -45,8 +45,11 @@ def main():
     print(f"{len(m):,} gene-models predictable by >=1 prior")
 
     sns.set_theme(style="ticks", font="DejaVu Sans")
+    # rasterize the dense point cloud so the PDF embeds it as a bitmap rather than
+    # ~350k vector circles (keeps axes, the y=x lines and text as crisp vectors).
     g = sns.pairplot(m, vars=cols, diag_kind="hist", corner=False,
-                     plot_kws=dict(s=6, alpha=0.15, edgecolor="none", color="#4C72B0"),
+                     plot_kws=dict(s=6, alpha=0.15, edgecolor="none", color="#4C72B0",
+                                   rasterized=True),
                      diag_kws=dict(color="#4C72B0", bins=60))
     lim = (min(0.0, m.min().min()), np.ceil(m.max().max() * 10) / 10)
     for i in range(len(cols)):
